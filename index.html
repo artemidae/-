@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Настоящие Шахматы Онлайн (Финал)</title>
+    <title>Настоящие Шахматы Онлайн (Исправлено)</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, Arial, sans-serif;
@@ -82,8 +82,8 @@
 </head>
 <body>
 
-    <div id="status">Загрузка доски...</div>
-    <div id="role">Определение роли...</div>
+    <div id="status">Инициализация доски...</div>
+    <div id="role">Определение цвета...</div>
     
     <div id="captured-by-black" class="captured-container"></div>
     <div id="board"></div>
@@ -95,20 +95,19 @@
     </div>
 
 <script>
-    // Инициализация комнаты
     const urlParams = new URLSearchParams(window.location.search);
     let roomId = urlParams.get('room');
     const isHost = !roomId; 
 
     if (isHost) {
-        // Создаем уникальный текстовый ключ для комнаты
-        roomId = 'ch-' + Math.random().toString(36).substring(2, 10);
+        // Генерируем уникальный ID комнаты (только цифры и буквы)
+        roomId = 'id' + Math.random().toString(36).substring(2, 10);
         window.history.pushState({}, '', window.location.pathname + '?room=' + roomId);
     }
     document.getElementById('game-url').textContent = window.location.href;
 
     let myColor = isHost ? 'white' : 'black';
-    let lastMoveTimestamp = 0; 
+    let lastMoveId = 0; 
 
     const pieces = {
         'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚', 'p': '♟',
@@ -154,7 +153,7 @@
         roleElement.textContent = myColor === 'white' ? "Вы играете за: БЕЛЫЕ" : "Вы играете за: ЧЕРНЫЕ (Доска перевернута)";
         updateUI();
         
-        // Запускаем бесконечный стабильный опрос сервера без внешних библиотек
+        // Опрашиваем сервер каждую секунду
         setInterval(listenForMoves, 1000);
     }
 
@@ -169,7 +168,6 @@
 
     function createBoard() {
         boardElement.innerHTML = '';
-        
         for (let i = 0; i < 64; i++) {
             const index = myColor === 'black' ? 63 - i : i;
             const row = Math.floor(index / 8);
@@ -222,7 +220,6 @@
     function selectPiece(row, col) {
         resetSelection();
         selectedCell = { row, col };
-        
         const targetIndex = row * 8 + col;
         const uiIndex = myColor === 'black' ? 63 - targetIndex : targetIndex;
         boardElement.children[uiIndex].classList.add('selected');
@@ -290,56 +287,43 @@
         updateUI();
     }
 
-    // ОТПРАВКА ХОДА: Используем чистый JSON-хранитель, который никогда не блокируется
+    // ИСПРАВЛЕННАЯ ОТПРАВКА: Корректная склейка URL без фигурных скобок
     function sendMoveToServer(fR, fC, tR, tC, mType) {
-        const timestamp = Date.now();
-        lastMoveTimestamp = timestamp;
+        const moveId = Date.now();
+        lastMoveId = moveId;
 
-        const moveData = { fR, fC, tR, tC, mType, player: myColor, t: timestamp };
+        const payload = {
+            id: roomId,
+            name: "chess_game",
+            data: { fR, fC, tR, tC, mType, mId: moveId, player: myColor }
+        };
 
-        // Сохраняем ход в бесплатный анонимный буфер хранения данных JSONbin
-        fetch(`https://jsonbin.io`, {
+        // Отправляем стандартный POST-запрос для обновления состояния контейнера
+        fetch('https://restful-api.dev', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-Bin-Name': roomId,
-                'X-Bin-Private': 'false'
-            },
-            body: JSON.stringify(moveData)
-        })
-        .then(res => res.json())
-        .then(res => {
-            // Сохраняем ID созданного контейнера в локальное хранилище для быстрого доступа соперника
-            localStorage.setItem(roomId, res.metadata.id);
-        })
-        .catch(e => console.log("Ошибка отправки"));
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        }).catch(e => console.log("Ошибка сети при отправке"));
     }
 
-    // ИНТЕНСИВНЫЙ ПРИЕМ ХОДА ИЗ ОБЛАКА
+    // ИСПРАВЛЕННЫЙ ПРИЕМ: Правильный URL-адрес для GET-запроса
     function listenForMoves() {
         if (currentTurn === myColor || isGameOver) return;
 
-        // Ищем ID созданной комнаты в публичном поисковом реестре
-        const binId = localStorage.getItem(roomId);
-        
-        // Если ID еще не сохранен локально, пытаемся получить актуальный ход через быстрый альтернативный шлюз
-        const targetUrl = binId ? `https://jsonbin.io/${binId}/latest` : `https://restful-api.dev{roomId}`;
-
-        fetch(targetUrl)
+        fetch('https://restful-api.dev?id=' + roomId)
             .then(res => res.json())
             .then(res => {
-                let data = null;
-                if (res.record) data = res.record; // Формат jsonbin
-                else if (res && res.length > 0 && res.data) data = res.data; // Формат restful-api
-
-                if (data && data.player && data.player !== myColor && data.t !== lastMoveTimestamp) {
-                    lastMoveTimestamp = data.t;
-                    executeMoveLocal(parseInt(data.fR), parseInt(data.fC), parseInt(data.tR), parseInt(data.tC), data.mType);
+                if (res && res.length > 0 && res[0].data) {
+                    const data = res[0].data;
+                    if (data.player && data.player !== myColor && data.mId !== lastMoveId) {
+                        lastMoveId = data.mId;
+                        executeMoveLocal(parseInt(data.fR), parseInt(data.fC), parseInt(data.tR), parseInt(data.tC), data.mType);
+                    }
                 }
             })
             .catch(e => {
-                // Если игры в облаке еще нет, хост делает техническую отправку
-                if (isHost && lastMoveTimestamp === 0) {
+                // Если хост зашел первым и видит ошибку 404 (объект еще не создан), создаем пустую комнату в облаке
+                if (isHost && lastMoveId === 0) {
                     sendMoveToServer(-1, -1, -1, -1, 'init');
                 }
             });
