@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Мультиплеерные Шахматы Онлайн</title>
-    <!-- Используем абсолютно стабильный CDN для Supabase, работающий в Safari iOS -->
+    <title>Мультиплеерные Шахматы Онлайн (P2P)</title>
+    <!-- Подключаем стабильную и бесплатную библиотеку прямой связи PeerJS -->
     <script src="https://unpkg.com"></script>
     <style>
         body {
@@ -84,8 +84,8 @@
 </head>
 <body>
 
-    <div id="status">Подключение к сети...</div>
-    <div id="role">Определение вашей роли...</div>
+    <div id="status">Создание комнаты...</div>
+    <div id="role">Инициализация сети P2P...</div>
     
     <div id="captured-by-black" class="captured-container"></div>
     <div id="board"></div>
@@ -93,25 +93,25 @@
     
     <div id="link-box">
         Поделитесь этой ссылкой для игры на iPhone / ПК: <br>
-        <strong id="game-url">Загрузка ссылки...</strong>
+        <strong id="game-url">Генерация ссылки...</strong>
     </div>
 
 <script>
-    const SUBABASE_URL = "https://supabase.co";
-    const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind6c2N2c21ieWdjb2lzZ3NodnNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MTY0NTAwMDAsImV4cCI6MjAyMjAxMDAwMH0.1v7fX_X1_ZEx_X1_ZEx_X1_ZEx_X1_ZEx_X1_ZEx_X1_ZEx";
-    
-    // Исправленный метод создания клиента, совместимый с утилитой unpkg
-    const supabaseClient = window.supabase.createClient(SUBABASE_URL, SUPABASE_KEY);
-
-    let roomId = null;
     const urlParams = new URLSearchParams(window.location.search);
-    roomId = urlParams.get('room');
+    let roomId = urlParams.get('room');
+    let isHost = !roomId; // Если в URL нет комнаты, этот игрок — Создатель (Белые)
 
-    if (!roomId) {
-        roomId = Math.random().toString(36).substring(2, 9);
+    if (isHost) {
+        // Генерируем случайный ID комнаты для создания прямой связи
+        roomId = Math.random().toString(36).substring(2, 10);
         window.history.pushState({}, '', window.location.pathname + '?room=' + roomId);
     }
     document.getElementById('game-url').textContent = window.location.href;
+
+    // Подключаемся к бесплатной открытой сети PeerJS
+    const peer = new Peer('chess-room-' + roomId);
+    let connection = null;
+    let myColor = isHost ? 'white' : 'black';
 
     const pieces = {
         'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚', 'p': '♟',
@@ -121,9 +121,6 @@
     let boardState, currentTurn, selectedCell, validMoves, isGameOver;
     let capturedByWhite = [];
     let capturedByBlack = [];
-    let myColor = 'spectator'; 
-    const myId = Math.random().toString(36).substring(2, 9);
-
     let movedState = {
         whiteKing: false, whiteLeftRook: false, whiteRightRook: false,
         blackKing: false, blackLeftRook: false, blackRightRook: false
@@ -158,42 +155,64 @@
         };
     }
 
-    const channel = supabaseClient.channel(`room-${roomId}`, {
-        config: { presence: { key: 'userId' } }
-    });
+    // ЛОГИКА СЕТЕВОГО ПОДКЛЮЧЕНИЯ ПРЯМОЙ СВЯЗИ (P2P)
+    if (isHost) {
+        roleElement.textContent = "Ваш цвет: БЕЛЫЕ. Ожидание подключения соперника...";
+        statusElement.textContent = "Ожидание второго игрока...";
+        
+        peer.on('open', () => {
+            resetLocalState();
+            createBoard();
+        });
 
-    channel
-        .on('presence', { event: 'sync' }, () => {
-            const state = channel.presenceState();
-            const presences = Object.values(state).flat();
-            
-            if (myColor === 'spectator') {
-                const myPresIndex = presences.findIndex(p => p.id === myId);
-                if (myPresIndex === 0) {
-                    myColor = 'white';
-                    roleElement.textContent = "Ваш цвет: БЕЛЫЕ";
-                } else if (myPresIndex === 1) {
-                    myColor = 'black';
-                    roleElement.textContent = "Ваш цвет: ЧЕРНЫЕ";
-                } else {
-                    roleElement.textContent = "Вы: Наблюдатель";
-                }
+        // Ждем, пока подключится второй игрок
+        peer.on('connection', (conn) => {
+            connection = conn;
+            setupConnectionListeners();
+            roleElement.textContent = "Ваш цвет: БЕЛЫЕ. Игрок подключился!";
+            statusElement.textContent = "Ваш ход (Белые)";
+        });
+    } else {
+        roleElement.textContent = "Ваш цвет: ЧЕРНЫЕ. Подключение к игре...";
+        statusElement.textContent = "Соединение...";
+
+        const clientPeer = new Peer(); // Случайный ID для гостя
+        clientPeer.on('open', () => {
+            // Подключаемся к хосту по ID его комнаты
+            connection = clientPeer.connect('chess-room-' + roomId);
+            setupConnectionListeners();
+        });
+    }
+
+    function setupConnectionListeners() {
+        connection.on('open', () => {
+            resetLocalState();
+            if (!isHost) {
+                roleElement.textContent = "Ваш цвет: ЧЕРНЫЕ. Успешно подключено!";
+                statusElement.textContent = "Ожидайте ход Белых...";
             }
-        })
-        .on('broadcast', { event: 'move' }, ({ payload }) => {
-            executeMoveData(payload.fromRow, payload.fromCol, payload.toRow, payload.toCol, payload.type);
-        })
-        .subscribe(async (status) => {
-            if (status === 'SUBSCRIBED') {
-                resetLocalState();
-                updateUI();
-                await channel.track({ id: myId });
+            updateUI();
+        });
+
+        // Прием хода от соперника по сети
+        connection.on('data', (data) => {
+            if (data.type === 'move-sync') {
+                executeMoveData(data.fromRow, data.fromCol, data.toRow, data.toCol, data.moveType);
             }
         });
 
+        connection.on('close', () => {
+            statusElement.textContent = "Соперник отключился от игры.";
+        });
+    }
+
     function updateUI() {
         if (!isGameOver) {
-            statusElement.textContent = currentTurn === 'white' ? 'Ход белых' : 'Ход черных';
+            if (currentTurn === myColor) {
+                statusElement.textContent = "Ваш ход!";
+            } else {
+                statusElement.textContent = currentTurn === 'white' ? 'Ходит соперник (Белые)...' : 'Ходит соперник (Черные)...';
+            }
         }
         capBlackElement.textContent = capturedByBlack.join(' ');
         capWhiteElement.textContent = capturedByWhite.join(' ');
@@ -225,7 +244,8 @@
     }
 
     function handleCellClick(row, col) {
-        if (isGameOver || myColor === 'spectator' || currentTurn !== myColor) return;
+        // Ходить можно только в свой ход и если соперник на связи
+        if (isGameOver || !connection || currentTurn !== myColor) return;
 
         const piece = boardState[row][col];
         const isWhitePiece = piece !== '' && piece === piece.toUpperCase();
@@ -238,12 +258,17 @@
         } else {
             const move = validMoves.find(m => m.row === row && m.col === col);
             if (move) {
+                // Выполняем ход локально
                 executeMoveData(selectedCell.row, selectedCell.col, row, col, move.type);
                 
-                channel.send({
-                    type: 'broadcast',
-                    event: 'move',
-                    payload: { fromRow: selectedCell.row, fromCol: selectedCell.col, toRow: row, toCol: col, type: move.type }
+                // Передаем данные о ходе сопернику напрямую по P2P
+                connection.send({
+                    type: 'move-sync',
+                    fromRow: selectedCell.row,
+                    fromCol: selectedCell.col,
+                    toRow: row,
+                    toCol: col,
+                    moveType: move.type
                 });
                 
                 resetSelection();
@@ -329,9 +354,9 @@
         let moves = [];
 
         const directions = {
-            r: [[1,0], [-1,0], [0,1], [0,-1]],
-            b: [[1,1], [1,-1], [-1,1], [-1,-1]],
-            q: [[1,0], [-1,0], [0,1], [0,-1], [1,1], [1,-1], [-1,1], [-1,-1]]
+            r: [, [-1,0],, [0,-1]],
+            b: [, [1,-1], [-1,1], [-1,-1]],
+            q: [, [-1,0],, [0,-1],, [1,-1], [-1,1], [-1,-1]]
         };
 
         function checkTarget(r, c) {
@@ -368,24 +393,24 @@
         }
 
         if (type === 'n') {
-            [[2,1],[2,-1],[-2,1],[-2,-1],[1,2],[1,-2],[-1,2],[-1,-2]].forEach(([dr, dc]) => {
+            [,[2,-1],[-2,1],[-2,-1],,[1,-2],[-1,2],[-1,-2]].forEach(([dr, dc]) => {
                 const res = checkTarget(row + dr, col + dc);
                 if (res === 'empty' || res === 'enemy') moves.push({ row: row + dr, col: col + dc, type: 'normal' });
             });
         }
 
         if (type === 'k') {
-            [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]].forEach(([dr, dc]) => {
+            [,[-1,0],,[0,-1],,[1,-1],[-1,1],[-1,-1]].forEach(([dr, dc]) => {
                 const res = checkTarget(row + dr, col + dc);
                 if (res === 'empty' || res === 'enemy') moves.push({ row: row + dr, col: col + dc, type: 'normal' });
             });
 
             if (isWhite && !movedState.whiteKing) {
-                if (!movedState.whiteRightRook && boardState[7][5] === '' && boardState[7][6] === '') moves.push({ row: 7, col: 6, type: 'castling-short' });
-                if (!movedState.whiteLeftRook && boardState[7][1] === '' && boardState[7][2] === '' && boardState[7][3] === '') moves.push({ row: 7, col: 2, type: 'castling-long' });
+                if (!movedState.whiteRightRook && boardState === '' && boardState === '') moves.push({ row: 7, col: 6, type: 'castling-short' });
+                if (!movedState.whiteLeftRook && boardState === '' && boardState === '' && boardState === '') moves.push({ row: 7, col: 2, type: 'castling-long' });
             } else if (!isWhite && !movedState.blackKing) {
-                if (!movedState.blackRightRook && boardState[0][5] === '' && boardState[0][6] === '') moves.push({ row: 0, col: 6, type: 'castling-short' });
-                if (!movedState.blackLeftRook && boardState[0][1] === '' && boardState[0][2] === '' && boardState[0][3] === '') moves.push({ row: 0, col: 2, type: 'castling-long' });
+                if (!movedState.blackRightRook && boardState === '' && boardState === '') moves.push({ row: 0, col: 6, type: 'castling-short' });
+                if (!movedState.blackLeftRook && boardState === '' && boardState === '' && boardState === '') moves.push({ row: 0, col: 2, type: 'castling-long' });
             }
         }
         return moves;
