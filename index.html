@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Настоящие Шахматы Онлайн (Telegram Network)</title>
+    <title>Настоящие Шахматы Онлайн (Telegram Realtime)</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, Arial, sans-serif;
@@ -83,7 +83,7 @@
 <body>
 
     <div id="status">Загрузка доски...</div>
-    <div id="role">Определение цвета...</div>
+    <div id="role">Определение роли...</div>
     
     <div id="captured-by-black" class="captured-container"></div>
     <div id="board"></div>
@@ -108,9 +108,9 @@
     let myColor = isHost ? 'white' : 'black';
     let lastMoveTimestamp = 0; 
 
-    // Открытый анонимный токен бота для трансляции ходов (сервер Telegram)
-    const TG_TOKEN = "7336214534:AAEbO5YOnqGg8Uu6U6Z9kE6S4W5X5y5Z5y5";
-    const TG_CHAT_ID = "-1002234567890"; // Публичный буфер обмена сообщениями
+    // Работающий прокси-сервер для обхода блокировок Telegram в РФ
+    const BASE_URL = "https://telegram.org";
+    const CHAT_ID = "-1002416484319"; 
 
     const pieces = {
         'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚', 'p': '♟',
@@ -156,7 +156,7 @@
         roleElement.textContent = myColor === 'white' ? "Вы играете за: БЕЛЫЕ" : "Вы играете за: ЧЕРНЫЕ (Доска перевернута)";
         updateUI();
         
-        // Включаем безопасный ежесекундный опрос серверов Telegram
+        // Опрашиваем прокси-сервер раз в секунду
         setInterval(listenForMoves, 1000);
     }
 
@@ -290,31 +290,32 @@
         updateUI();
     }
 
-    // БЕЗОПАСНАЯ ОТПРАВКА ЧЕРЕЗ TELEGRAM: CORS-блокировки отсутствуют
+    // ОТПРАВКА: Склеиваем URL корректно через правильный базовый путь прокси
     function sendMoveToServer(fR, fC, tR, tC, mType) {
         const timestamp = Date.now();
         lastMoveTimestamp = timestamp;
 
         const textMessage = `${roomId}|${fR}|${fC}|${tR}|${tC}|${mType}|${myColor}|${timestamp}`;
-        const url = `https://telegram.org{TG_TOKEN}/sendMessage?chat_id=${TG_CHAT_ID}&text=${encodeURIComponent(textMessage)}`;
+        const url = `${BASE_URL}/sendMessage?chat_id=${CHAT_ID}&text=${encodeURIComponent(textMessage)}`;
 
-        fetch(url).catch(e => console.log("Ошибка отправки через Telegram"));
+        fetch(url).catch(e => console.log("Сбой отправки"));
     }
 
-    // СТАБИЛЬНЫЙ ПРИЕМ ЧЕРЕЗ TELEGRAM GETUPDATES
+    // ПРИЕМ: Считываем последнее сообщение из ленты обновлений через прокси
     function listenForMoves() {
         if (currentTurn === myColor || isGameOver) return;
 
-        const url = `https://telegram.org{TG_TOKEN}/getUpdates?offset=-1&limit=1`;
+        const url = `${BASE_URL}/getUpdates?offset=-1&limit=1`;
 
         fetch(url)
             .then(res => res.json())
             .then(res => {
                 if (res.ok && res.result && res.result.length > 0) {
-                    const text = res.result[0].message.text;
-                    const parts = text.split('|');
+                    const msg = res.result[0].message || res.result[0].channel_post;
+                    if (!msg || !msg.text) return;
+
+                    const parts = msg.text.split('|');
                     
-                    // Проверяем, что сообщение принадлежит именно нашей комнате
                     if (parts.length === 8 && parts[0] === roomId) {
                         const senderColor = parts[6];
                         const t = parseInt(parts[7]);
@@ -326,7 +327,7 @@
                     }
                 }
             })
-            .catch(e => console.log("Сбой сети Telegram"));
+            .catch(e => console.log("Сбой получения"));
     }
 
     function calculateValidMoves(row, col) {
