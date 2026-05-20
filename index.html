@@ -3,9 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Мультиплеерные Шахматы Онлайн (P2P)</title>
-    <!-- Подключаем стабильную и бесплатную библиотеку прямой связи PeerJS -->
-    <script src="https://unpkg.com"></script>
+    <title>Автономные Шахматы для Двух Игроков</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, Arial, sans-serif;
@@ -19,14 +17,8 @@
         }
         #status {
             font-size: 20px;
-            margin-bottom: 3px;
+            margin-bottom: 5px;
             font-weight: bold;
-            text-align: center;
-        }
-        #role {
-            font-size: 14px;
-            color: #555;
-            margin-bottom: 10px;
             text-align: center;
         }
         .captured-container {
@@ -37,8 +29,6 @@
             width: 100%;
             max-width: 360px;
             text-align: center;
-            overflow: hidden;
-            white-space: nowrap;
         }
         #captured-by-black { color: #fff; text-shadow: 0 0 3px #000; }
         #captured-by-white { color: #000; }
@@ -61,58 +51,59 @@
             cursor: pointer;
             user-select: none;
             -webkit-user-select: none;
-            transition: background-color 0.1s;
         }
         .white-cell { background-color: #f0d9b5; }
         .black-cell { background-color: #b58863; }
         .selected { background-color: #7ab2e0 !important; }
         .valid-move { background-color: #acd1a8 !important; }
         
-        #link-box {
-            margin-top: 15px;
+        #sync-box {
+            margin-top: 10px;
             padding: 10px;
             background: #fff;
-            border: 1px dashed #777;
+            border: 1px solid #ccc;
             border-radius: 4px;
-            font-size: 12px;
             width: 90%;
             max-width: 340px;
-            word-break: break-all;
             text-align: center;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        input {
+            width: 80%;
+            padding: 6px;
+            margin: 5px 0;
+            font-size: 14px;
+            text-align: center;
+        }
+        button {
+            padding: 6px 12px;
+            font-size: 14px;
+            cursor: pointer;
+            background-color: #7ab2e0;
+            border: none;
+            color: white;
+            border-radius: 3px;
         }
     </style>
 </head>
 <body>
 
-    <div id="status">Создание комнаты...</div>
-    <div id="role">Инициализация сети P2P...</div>
+    <div id="status">Ход белых</div>
     
     <div id="captured-by-black" class="captured-container"></div>
     <div id="board"></div>
     <div id="captured-by-white" class="captured-container"></div>
     
-    <div id="link-box">
-        Поделитесь этой ссылкой для игры на iPhone / ПК: <br>
-        <strong id="game-url">Генерация ссылки...</strong>
+    <div id="sync-box">
+        <div id="sync-instruction">Сделайте ход, скопируйте код и отправьте другу:</div>
+        <input type="text" id="sync-code" readonly onclick="this.select()">
+        <br>
+        <input type="text" id="input-code" placeholder="Вставьте код от друга сюда">
+        <br>
+        <button onclick="applyFriendMove()">Применить ход</button>
     </div>
 
 <script>
-    const urlParams = new URLSearchParams(window.location.search);
-    let roomId = urlParams.get('room');
-    let isHost = !roomId; // Если в URL нет комнаты, этот игрок — Создатель (Белые)
-
-    if (isHost) {
-        // Генерируем случайный ID комнаты для создания прямой связи
-        roomId = Math.random().toString(36).substring(2, 10);
-        window.history.pushState({}, '', window.location.pathname + '?room=' + roomId);
-    }
-    document.getElementById('game-url').textContent = window.location.href;
-
-    // Подключаемся к бесплатной открытой сети PeerJS
-    const peer = new Peer('chess-room-' + roomId);
-    let connection = null;
-    let myColor = isHost ? 'white' : 'black';
-
     const pieces = {
         'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚', 'p': '♟',
         'R': '♖', 'N': '♘', 'B': '♗', 'Q': '♕', 'K': '♔', 'P': '♙', '': ''
@@ -128,11 +119,12 @@
 
     const boardElement = document.getElementById('board');
     const statusElement = document.getElementById('status');
-    const roleElement = document.getElementById('role');
     const capWhiteElement = document.getElementById('captured-by-white');
     const capBlackElement = document.getElementById('captured-by-black');
+    const syncCodeInput = document.getElementById('sync-code');
+    const inputCodeInput = document.getElementById('input-code');
 
-    function resetLocalState() {
+    function initGame() {
         boardState = [
             ['r', 'n', 'b', 'q', 'k', 'b', 'n', 'r'],
             ['p', 'p', 'p', 'p', 'p', 'p', 'p', 'p'],
@@ -153,66 +145,13 @@
             whiteKing: false, whiteLeftRook: false, whiteRightRook: false,
             blackKing: false, blackLeftRook: false, blackRightRook: false
         };
-    }
-
-    // ЛОГИКА СЕТЕВОГО ПОДКЛЮЧЕНИЯ ПРЯМОЙ СВЯЗИ (P2P)
-    if (isHost) {
-        roleElement.textContent = "Ваш цвет: БЕЛЫЕ. Ожидание подключения соперника...";
-        statusElement.textContent = "Ожидание второго игрока...";
-        
-        peer.on('open', () => {
-            resetLocalState();
-            createBoard();
-        });
-
-        // Ждем, пока подключится второй игрок
-        peer.on('connection', (conn) => {
-            connection = conn;
-            setupConnectionListeners();
-            roleElement.textContent = "Ваш цвет: БЕЛЫЕ. Игрок подключился!";
-            statusElement.textContent = "Ваш ход (Белые)";
-        });
-    } else {
-        roleElement.textContent = "Ваш цвет: ЧЕРНЫЕ. Подключение к игре...";
-        statusElement.textContent = "Соединение...";
-
-        const clientPeer = new Peer(); // Случайный ID для гостя
-        clientPeer.on('open', () => {
-            // Подключаемся к хосту по ID его комнаты
-            connection = clientPeer.connect('chess-room-' + roomId);
-            setupConnectionListeners();
-        });
-    }
-
-    function setupConnectionListeners() {
-        connection.on('open', () => {
-            resetLocalState();
-            if (!isHost) {
-                roleElement.textContent = "Ваш цвет: ЧЕРНЫЕ. Успешно подключено!";
-                statusElement.textContent = "Ожидайте ход Белых...";
-            }
-            updateUI();
-        });
-
-        // Прием хода от соперника по сети
-        connection.on('data', (data) => {
-            if (data.type === 'move-sync') {
-                executeMoveData(data.fromRow, data.fromCol, data.toRow, data.toCol, data.moveType);
-            }
-        });
-
-        connection.on('close', () => {
-            statusElement.textContent = "Соперник отключился от игры.";
-        });
+        generateSyncCode();
+        updateUI();
     }
 
     function updateUI() {
         if (!isGameOver) {
-            if (currentTurn === myColor) {
-                statusElement.textContent = "Ваш ход!";
-            } else {
-                statusElement.textContent = currentTurn === 'white' ? 'Ходит соперник (Белые)...' : 'Ходит соперник (Черные)...';
-            }
+            statusElement.textContent = currentTurn === 'white' ? 'Ход белых' : 'Ход черных';
         }
         capBlackElement.textContent = capturedByBlack.join(' ');
         capWhiteElement.textContent = capturedByWhite.join(' ');
@@ -244,8 +183,7 @@
     }
 
     function handleCellClick(row, col) {
-        // Ходить можно только в свой ход и если соперник на связи
-        if (isGameOver || !connection || currentTurn !== myColor) return;
+        if (isGameOver) return;
 
         const piece = boardState[row][col];
         const isWhitePiece = piece !== '' && piece === piece.toUpperCase();
@@ -258,20 +196,9 @@
         } else {
             const move = validMoves.find(m => m.row === row && m.col === col);
             if (move) {
-                // Выполняем ход локально
                 executeMoveData(selectedCell.row, selectedCell.col, row, col, move.type);
-                
-                // Передаем данные о ходе сопернику напрямую по P2P
-                connection.send({
-                    type: 'move-sync',
-                    fromRow: selectedCell.row,
-                    fromCol: selectedCell.col,
-                    toRow: row,
-                    toCol: col,
-                    moveType: move.type
-                });
-                
                 resetSelection();
+                generateSyncCode();
             } else if ((currentTurn === 'white' && isWhitePiece) || (currentTurn === 'black' && isBlackPiece)) {
                 selectPiece(row, col);
             } else {
@@ -347,6 +274,39 @@
         updateUI();
     }
 
+    // Кодирование состояния игры в короткую строку
+    function generateSyncCode() {
+        const state = {
+            b: boardState,
+            t: currentTurn,
+            cw: capturedByWhite,
+            cb: capturedByBlack,
+            m: movedState,
+            g: isGameOver
+        };
+        syncCodeInput.value = btoa(encodeURIComponent(JSON.stringify(state)));
+    }
+
+    // Применение кода, полученного от соперника
+    function applyFriendMove() {
+        const code = inputCodeInput.value.trim();
+        if (!code) return;
+        try {
+            const decoded = JSON.parse(decodeURIComponent(atob(code)));
+            boardState = decoded.b;
+            currentTurn = decoded.t;
+            capturedByWhite = decoded.cw;
+            capturedByBlack = decoded.cb;
+            movedState = decoded.m;
+            isGameOver = decoded.g;
+            inputCodeInput.value = '';
+            generateSyncCode();
+            updateUI();
+        } catch (e) {
+            alert('Неверный код хода! Скопируйте код соперника заново.');
+        }
+    }
+
     function calculateValidMoves(row, col) {
         const piece = boardState[row][col];
         const type = piece.toLowerCase();
@@ -415,6 +375,8 @@
         }
         return moves;
     }
+
+    initGame();
 </script>
 </body>
 </html>
