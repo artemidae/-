@@ -3,7 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Автономные Шахматы для Двух Игроков</title>
+    <title>Настоящие Шахматы Онлайн</title>
+    <!-- Подключаем официальные модули базы данных Firebase -->
+    <script src="https://gstatic.com"></script>
+    <script src="https://gstatic.com"></script>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, Arial, sans-serif;
@@ -17,8 +20,14 @@
         }
         #status {
             font-size: 20px;
-            margin-bottom: 5px;
+            margin-bottom: 3px;
             font-weight: bold;
+            text-align: center;
+        }
+        #role {
+            font-size: 14px;
+            color: #555;
+            margin-bottom: 10px;
             text-align: center;
         }
         .captured-container {
@@ -29,6 +38,8 @@
             width: 100%;
             max-width: 360px;
             text-align: center;
+            overflow: hidden;
+            white-space: nowrap;
         }
         #captured-by-black { color: #fff; text-shadow: 0 0 3px #000; }
         #captured-by-white { color: #000; }
@@ -51,59 +62,62 @@
             cursor: pointer;
             user-select: none;
             -webkit-user-select: none;
+            transition: background-color 0.1s;
         }
         .white-cell { background-color: #f0d9b5; }
         .black-cell { background-color: #b58863; }
         .selected { background-color: #7ab2e0 !important; }
         .valid-move { background-color: #acd1a8 !important; }
         
-        #sync-box {
-            margin-top: 10px;
+        #link-box {
+            margin-top: 15px;
             padding: 10px;
             background: #fff;
-            border: 1px solid #ccc;
+            border: 1px dashed #777;
             border-radius: 4px;
+            font-size: 12px;
             width: 90%;
             max-width: 340px;
+            word-break: break-all;
             text-align: center;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        input {
-            width: 80%;
-            padding: 6px;
-            margin: 5px 0;
-            font-size: 14px;
-            text-align: center;
-        }
-        button {
-            padding: 6px 12px;
-            font-size: 14px;
-            cursor: pointer;
-            background-color: #7ab2e0;
-            border: none;
-            color: white;
-            border-radius: 3px;
         }
     </style>
 </head>
 <body>
 
-    <div id="status">Ход белых</div>
+    <div id="status">Подключение к серверу...</div>
+    <div id="role">Определение цвета...</div>
     
     <div id="captured-by-black" class="captured-container"></div>
     <div id="board"></div>
     <div id="captured-by-white" class="captured-container"></div>
     
-    <div id="sync-box">
-        <div id="sync-instruction">Сделайте ход, скопируйте код и отправьте другу:</div>
-        <input type="text" id="sync-code" readonly onclick="this.select()">
-        <br>
-        <input type="text" id="input-code" placeholder="Вставьте код от друга сюда">
-        <br>
-        <button onclick="applyFriendMove()">Применить ход</button>
+    <div id="link-box">
+        Поделитесь ссылкой с соперником (запустится автоматически): <br>
+        <strong id="game-url">Создание комнаты...</strong>
     </div>
 
 <script>
+    // Публичная база данных Firebase для мгновенной синхронизации ходов
+    const firebaseConfig = {
+        databaseURL: "https://firebaseio.com"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const database = firebase.database();
+
+    const urlParams = new URLSearchParams(window.location.search);
+    let roomId = urlParams.get('room');
+    const myId = Math.random().toString(36).substring(2, 9);
+    let myColor = 'spectator';
+
+    if (!roomId) {
+        roomId = Math.random().toString(36).substring(2, 10);
+        window.history.pushState({}, '', window.location.pathname + '?room=' + roomId);
+    }
+    document.getElementById('game-url').textContent = window.location.href;
+
+    const roomRef = database.ref('rooms/' + roomId);
+
     const pieces = {
         'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚', 'p': '♟',
         'R': '♖', 'N': '♘', 'B': '♗', 'Q': '♕', 'K': '♔', 'P': '♙', '': ''
@@ -119,44 +133,87 @@
 
     const boardElement = document.getElementById('board');
     const statusElement = document.getElementById('status');
+    const roleElement = document.getElementById('role');
     const capWhiteElement = document.getElementById('captured-by-white');
     const capBlackElement = document.getElementById('captured-by-black');
-    const syncCodeInput = document.getElementById('sync-code');
-    const inputCodeInput = document.getElementById('input-code');
 
-    function initGame() {
-        boardState = [
-            ['r', 'n', 'b', 'q', 'k', 'b', 'n', 'r'],
-            ['p', 'p', 'p', 'p', 'p', 'p', 'p', 'p'],
-            ['', '', '', '', '', '', '', ''],
-            ['', '', '', '', '', '', '', ''],
-            ['', '', '', '', '', '', '', ''],
-            ['', '', '', '', '', '', '', ''],
-            ['P', 'P', 'P', 'P', 'P', 'P', 'P', 'P'],
-            ['R', 'N', 'B', 'Q', 'K', 'B', 'N', 'R']
-        ];
-        currentTurn = 'white';
-        selectedCell = null;
-        validMoves = [];
-        isGameOver = false;
-        capturedByWhite = [];
-        capturedByBlack = [];
-        movedState = {
-            whiteKing: false, whiteLeftRook: false, whiteRightRook: false,
-            blackKing: false, blackLeftRook: false, blackRightRook: false
+    function getDefaultState() {
+        return {
+            boardState: [
+                ['r', 'n', 'b', 'q', 'k', 'b', 'n', 'r'],
+                ['p', 'p', 'p', 'p', 'p', 'p', 'p', 'p'],
+                ['', '', '', '', '', '', '', ''],
+                ['', '', '', '', '', '', '', ''],
+                ['', '', '', '', '', '', '', ''],
+                ['', '', '', '', '', '', '', ''],
+                ['P', 'P', 'P', 'P', 'P', 'P', 'P', 'P'],
+                ['R', 'N', 'B', 'Q', 'K', 'B', 'N', 'R']
+            ],
+            currentTurn: 'white',
+            isGameOver: false,
+            capturedByWhite: [],
+            capturedByBlack: [],
+            movedState: {
+                whiteKing: false, whiteLeftRook: false, whiteRightRook: false,
+                blackKing: false, blackLeftRook: false, blackRightRook: false
+            }
         };
-        generateSyncCode();
-        updateUI();
     }
 
-    function updateUI() {
-        if (!isGameOver) {
-            statusElement.textContent = currentTurn === 'white' ? 'Ход белых' : 'Ход черных';
+    // РАСПРЕДЕЛЕНИЕ ИГРОКОВ ПО ЦВЕТАМ И СИНХРОНИЗАЦИЯ
+    roomRef.once('value', (snapshot) => {
+        if (!snapshot.exists()) {
+            // Первый зашедший инициализирует базу данных
+            const initialData = getDefaultState();
+            initialData.playerWhite = myId;
+            roomRef.set(initialData);
+            myColor = 'white';
+            roleElement.textContent = "Ваш цвет: БЕЛЫЕ. Ожидайте черных...";
+        } else {
+            const data = snapshot.val();
+            if (!data.playerBlack && data.playerWhite !== myId) {
+                roomRef.child('playerBlack').set(myId);
+                myColor = 'black';
+                roleElement.textContent = "Ваш цвет: ЧЕРНЫЕ.";
+            } else if (data.playerWhite === myId) {
+                myColor = 'white';
+                roleElement.textContent = "Ваш цвет: БЕЛЫЕ.";
+            } else if (data.playerBlack === myId) {
+                myColor = 'black';
+                roleElement.textContent = "Ваш цвет: ЧЕРНЫЕ.";
+            } else {
+                myColor = 'spectator';
+                roleElement.textContent = "Вы: Наблюдатель (игра занята).";
+            }
         }
+    });
+
+    // Слушатель изменений на сервере — обновляет доску мгновенно у обоих игроков
+    roomRef.on('value', (snapshot) => {
+        if (!snapshot.exists()) return;
+        const data = snapshot.val();
+        
+        boardState = data.boardState;
+        currentTurn = data.currentTurn;
+        isGameOver = data.isGameOver;
+        capturedByWhite = data.capturedByWhite || [];
+        capturedByBlack = data.capturedByBlack || [];
+        movedState = data.movedState;
+
+        if (!isGameOver) {
+            if (myColor === 'spectator') {
+                statusElement.textContent = currentTurn === 'white' ? 'Ход белых...' : 'Ход черных...';
+            } else {
+                statusElement.textContent = currentTurn === myColor ? 'Ваш ход!' : 'Ожидание соперника...';
+            }
+        } else {
+            statusElement.textContent = currentTurn === 'white' ? 'Мат! Черные победили.' : 'Мат! Белые победили.';
+        }
+
         capBlackElement.textContent = capturedByBlack.join(' ');
         capWhiteElement.textContent = capturedByWhite.join(' ');
         createBoard();
-    }
+    });
 
     function createBoard() {
         boardElement.innerHTML = '';
@@ -183,7 +240,7 @@
     }
 
     function handleCellClick(row, col) {
-        if (isGameOver) return;
+        if (isGameOver || myColor === 'spectator' || currentTurn !== myColor) return;
 
         const piece = boardState[row][col];
         const isWhitePiece = piece !== '' && piece === piece.toUpperCase();
@@ -196,9 +253,8 @@
         } else {
             const move = validMoves.find(m => m.row === row && m.col === col);
             if (move) {
-                executeMoveData(selectedCell.row, selectedCell.col, row, col, move.type);
+                executeMoveLocal(selectedCell.row, selectedCell.col, row, col, move.type);
                 resetSelection();
-                generateSyncCode();
             } else if ((currentTurn === 'white' && isWhitePiece) || (currentTurn === 'black' && isBlackPiece)) {
                 selectPiece(row, col);
             } else {
@@ -225,7 +281,7 @@
         Array.from(boardElement.children).forEach(cell => cell.classList.remove('selected', 'valid-move'));
     }
 
-    function executeMoveData(fromRow, fromCol, toRow, toCol, moveType) {
+    function executeMoveLocal(fromRow, fromCol, toRow, toCol, moveType) {
         let piece = boardState[fromRow][fromCol];
         const targetPiece = boardState[toRow][toCol];
 
@@ -241,12 +297,7 @@
             boardState[toRow][toCol] = piece;
             boardState[fromRow][fromCol] = '';
             isGameOver = true;
-            statusElement.textContent = currentTurn === 'white' ? 'Белые победили!' : 'Черные победили!';
-            updateUI();
-            return;
-        }
-
-        if (moveType === 'castling-short') {
+        } else if (moveType === 'castling-short') {
             boardState[toRow][toCol] = piece;
             boardState[fromRow][fromCol] = '';
             boardState[toRow][toCol-1] = boardState[toRow][toCol+1];
@@ -270,41 +321,15 @@
         if (fromRow === 0 && fromCol === 0) movedState.blackLeftRook = true;
         if (fromRow === 0 && fromCol === 7) movedState.blackRightRook = true;
 
-        currentTurn = currentTurn === 'white' ? 'black' : 'white';
-        updateUI();
-    }
-
-    // Кодирование состояния игры в короткую строку
-    function generateSyncCode() {
-        const state = {
-            b: boardState,
-            t: currentTurn,
-            cw: capturedByWhite,
-            cb: capturedByBlack,
-            m: movedState,
-            g: isGameOver
-        };
-        syncCodeInput.value = btoa(encodeURIComponent(JSON.stringify(state)));
-    }
-
-    // Применение кода, полученного от соперника
-    function applyFriendMove() {
-        const code = inputCodeInput.value.trim();
-        if (!code) return;
-        try {
-            const decoded = JSON.parse(decodeURIComponent(atob(code)));
-            boardState = decoded.b;
-            currentTurn = decoded.t;
-            capturedByWhite = decoded.cw;
-            capturedByBlack = decoded.cb;
-            movedState = decoded.m;
-            isGameOver = decoded.g;
-            inputCodeInput.value = '';
-            generateSyncCode();
-            updateUI();
-        } catch (e) {
-            alert('Неверный код хода! Скопируйте код соперника заново.');
-        }
+        // Отправляем обновленные данные на сервер — у соперника они отобразятся за миллисекунды
+        roomRef.update({
+            boardState: boardState,
+            currentTurn: currentTurn === 'white' ? 'black' : 'white',
+            isGameOver: isGameOver,
+            capturedByWhite: capturedByWhite,
+            capturedByBlack: capturedByBlack,
+            movedState: movedState
+        });
     }
 
     function calculateValidMoves(row, col) {
@@ -360,7 +385,7 @@
         }
 
         if (type === 'k') {
-            [,[-1,0],,[0,-1],,[1,-1],[-1,1],[-1,-1]].forEach(([dr, dc]) => {
+            [,[-1,0],,[0,-1], PierQueryResult,[1,-1],[-1,1],[-1,-1]].forEach(([dr, dc]) => {
                 const res = checkTarget(row + dr, col + dc);
                 if (res === 'empty' || res === 'enemy') moves.push({ row: row + dr, col: col + dc, type: 'normal' });
             });
@@ -375,8 +400,6 @@
         }
         return moves;
     }
-
-    initGame();
 </script>
 </body>
 </html>
