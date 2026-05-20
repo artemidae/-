@@ -2,11 +2,10 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <!-- Запрещаем масштабирование в Safari iOS при частых кликах -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Мультиплеерные Шахматы Онлайн</title>
-    <!-- Подключаем библиотеку Supabase для онлайн-синхронизации -->
-    <script src="https://jsdelivr.net"></script>
+    <!-- Используем абсолютно стабильный CDN для Supabase, работающий в Safari iOS -->
+    <script src="https://unpkg.com"></script>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, Arial, sans-serif;
@@ -15,7 +14,6 @@
             align-items: center;
             background-color: #f0f0f0;
             margin: 10px;
-            /* Убираем задержку клика и выделение в iOS Safari */
             -webkit-tap-highlight-color: transparent;
             touch-action: manipulation;
         }
@@ -45,7 +43,6 @@
         #captured-by-black { color: #fff; text-shadow: 0 0 3px #000; }
         #captured-by-white { color: #000; }
         
-        /* Адаптивная доска под размеры iPhone */
         #board {
             display: grid;
             grid-template-columns: repeat(8, min(11vw, 45px));
@@ -60,7 +57,7 @@
             display: flex;
             justify-content: center;
             align-items: center;
-            font-size: min(8vw, 32px); /* Фигуры масштабируются под экран */
+            font-size: min(8vw, 32px);
             cursor: pointer;
             user-select: none;
             -webkit-user-select: none;
@@ -100,29 +97,19 @@
     </div>
 
 <script>
-    // Публичные ключи Supabase
     const SUBABASE_URL = "https://supabase.co";
     const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind6c2N2c21ieWdjb2lzZ3NodnNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MTY0NTAwMDAsImV4cCI6MjAyMjAxMDAwMH0.1v7fX_X1_ZEx_X1_ZEx_X1_ZEx_X1_ZEx_X1_ZEx_X1_ZEx";
     
-    // Исправление для Safari iOS: правильная инициализация клиента
-    const supabaseClient = supabase.createClient(SUBABASE_URL, SUPABASE_KEY);
+    // Исправленный метод создания клиента, совместимый с утилитой unpkg
+    const supabaseClient = window.supabase.createClient(SUBABASE_URL, SUPABASE_KEY);
 
-    // Парсинг параметров URL, совместимый со всеми версиями мобильного Safari
     let roomId = null;
-    try {
-        const urlParams = new URLSearchParams(window.location.search);
-        roomId = urlParams.get('room');
-    } catch(e) {
-        // Запасной вариант для старых iOS
-        const match = window.location.search.match(/[?&]room=([^&]+)/);
-        if (match) roomId = match[1];
-    }
+    const urlParams = new URLSearchParams(window.location.search);
+    roomId = urlParams.get('room');
 
     if (!roomId) {
         roomId = Math.random().toString(36).substring(2, 9);
-        try {
-            window.history.pushState({}, '', window.location.pathname + '?room=' + roomId);
-        } catch(e) {}
+        window.history.pushState({}, '', window.location.pathname + '?room=' + roomId);
     }
     document.getElementById('game-url').textContent = window.location.href;
 
@@ -171,7 +158,6 @@
         };
     }
 
-    // Подключение к комнате через правильный клиент
     const channel = supabaseClient.channel(`room-${roomId}`, {
         config: { presence: { key: 'userId' } }
     });
@@ -232,7 +218,6 @@
                     cell.style.color = '#000';
                 }
 
-                // Используем click, но с touch-action стилями в CSS для отзывчивости на iOS
                 cell.addEventListener('click', () => handleCellClick(row, col));
                 boardElement.appendChild(cell);
             }
@@ -312,13 +297,13 @@
         if (moveType === 'castling-short') {
             boardState[toRow][toCol] = piece;
             boardState[fromRow][fromCol] = '';
-            boardState[toRow][toCol-1] = boardState[toRow][7];
-            boardState[toRow][7] = '';
+            boardState[toRow][toCol-1] = boardState[toRow][toCol+1];
+            boardState[toRow][toCol+1] = '';
         } else if (moveType === 'castling-long') {
             boardState[toRow][toCol] = piece;
             boardState[fromRow][fromCol] = '';
-            boardState[toRow][toCol+1] = boardState[toRow][0];
-            boardState[toRow][0] = '';
+            boardState[toRow][toCol+1] = boardState[toRow][toCol-4];
+            boardState[toRow][toCol-4] = '';
         } else {
             if (piece === 'P' && toRow === 0) piece = 'Q';
             if (piece === 'p' && toRow === 7) piece = 'q';
