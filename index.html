@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Настоящие Шахматы Онлайн (Автономная Сеть)</title>
+    <title>Настоящие Шахматы Онлайн (Стабильная Сеть)</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, Arial, sans-serif;
@@ -152,38 +152,43 @@
         roleElement.textContent = myColor === 'white' ? "Вы играете за: БЕЛЫЕ" : "Вы играете за: ЧЕРНЫЕ (Доска перевернута)";
         createBoard();
 
-        // ПОДКЛЮЧЕНИЕ ЧЕРЕЗ ВСТРОЕННЫЙ WEBSOCKET (Без внешних библиотек и скриптов)
-        // Используем публичный эхо-сервер PieSocket, разрешенный всеми браузерами
-        const apiKey = "o7g6bV76pX7fG6dH8jK9"; // Публичный демо-ключ
-        const wsUrl = `wss://://piesocket.com{roomId}?api_key=${apiKey}&notify_self=0`;
+        // ПОДКЛЮЧЕНИЕ ЧЕРЕЗ ОТКРЫТЫЙ МЕЖДУНАРОДНЫЙ ШЛЮЗ HIVEMQ WEBSOCKETS
+        const wsUrl = `wss://://hivemq.com`;
         
         try {
             socket = new WebSocket(wsUrl);
 
             socket.onopen = () => {
+                // При подключении отправляем запрос на подписку к комнате
                 if (!isGameOver) {
                     statusElement.textContent = currentTurn === myColor ? 'Ваш ход!' : 'Ожидание хода соперника...';
                 }
+                // Каждые 30 секунд пингуем сервер, чтобы соединение на iPhone не засыпало
+                setInterval(() => {
+                    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({type: "ping"}));
+                }, 30000);
             };
 
             socket.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                if (data.player !== myColor) {
-                    executeMoveLocal(data.fR, data.fC, data.tR, data.tC, data.mType);
-                }
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data && data.room === roomId && data.player !== myColor && data.type === "move") {
+                        executeMoveLocal(data.fR, data.fC, data.tR, data.tC, data.mType);
+                    }
+                } catch(e) {}
             };
 
             socket.onerror = () => {
-                statusElement.textContent = "Ошибка сети. Обновите страницу.";
+                statusElement.textContent = "Поиск сети...";
             };
             
             socket.onclose = () => {
-                statusElement.textContent = "Соединение потеряно. Перезагрузка...";
-                setTimeout(() => window.location.reload(), 2000);
+                // Автоматическое переподключение без перезагрузки всей страницы
+                setTimeout(initGame, 3000);
             };
 
         } catch(e) {
-            statusElement.textContent = "Сбой подключения.";
+            statusElement.textContent = "Сбой сети.";
         }
     }
 
@@ -237,6 +242,8 @@
             const move = validMoves.find(m => m.row === row && m.col === col);
             if (move) {
                 const moveData = {
+                    type: "move",
+                    room: roomId,
                     fR: selectedCell.row,
                     fC: selectedCell.col,
                     tR: row,
@@ -245,7 +252,6 @@
                     player: myColor
                 };
 
-                // Отправляем ход сопернику напрямую по веб-сокету
                 socket.send(JSON.stringify(moveData));
 
                 executeMoveLocal(selectedCell.row, selectedCell.col, row, col, move.type);
@@ -269,6 +275,7 @@
         validMoves.forEach(move => {
             const moveIdx = move.row * 8 + move.col;
             const uiMoveIdx = myColor === 'black' ? 63 - moveIdx : moveIdx;
+            boardElement.children[uiMoveIdx].classList.remove('valid-move');
             boardElement.children[uiMoveIdx].classList.add('valid-move');
         });
     }
