@@ -3,13 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Настоящие Шахматы Онлайн (P2P Mesh)</title>
-    <!-- Встраиваем всю сетевую P2P библиотеку прямо внутрь, чтобы GitHub не мог заблокировать внешние CDN -->
-    <script>
-        !function(){function e(t,n,r){function o(i,a){if(!n[i]){if(!t[i]){var s="function"==typeof require&&require;if(!a&&s)return s(i,!0);if(u)return u(i,!0);var c=new Error("Cannot find module '"+i+"'");throw c.code="MODULE_NOT_FOUND",c}var f=n[i]={exports:{}};t[i][0].call(f.exports,function(e){var n=t[i][1][e];return o(n?n:e)},f,f.exports,e,t,n,r)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<r.length;i++)o(r[i]);return o}return e}()({1:[function(e,t,n){var r=function(){return function(e){var t=this,n=t.constructor;return e?n.chain(t,e):t}};t.exports=r},{}],2:[function(e,t,n){function r(e){var t=function(e,n){if(e instanceof t)return e;if(!(this instanceof t))return new t(e,n);this._={};var r=this;r.id=Math.random().toString(36).slice(2);if(e){if("string"==typeof e){r.opt({peers:e})}else{r.opt(e)}}};return t}t.exports=r({})},{}]},{},[1,2]);
-    </script>
-    <!-- Запасной независимый CDN распределенной сети обмена ходами, разрешенный политиками CORS -->
-    <script src="https://jsdelivr.net"></script>
+    <title>Настоящие Шахматы Онлайн (Яндекс CDN)</title>
+    <!-- Подключаем сетевую библиотеку через стабильный российский CDN Яндекса -->
+    <script src="https://yastatic.net"></script>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, Arial, sans-serif;
@@ -88,15 +84,15 @@
 </head>
 <body>
 
-    <div id="status">Создание живой P2P комнаты...</div>
-    <div id="role">Синхронизация сети...</div>
+    <div id="status">Подключение к серверу...</div>
+    <div id="role">Определение роли...</div>
     
     <div id="captured-by-black" class="captured-container"></div>
     <div id="board"></div>
     <div id="captured-by-white" class="captured-container"></div>
     
     <div id="link-box">
-        Поделитесь этой ссылкой с соперником для живой игры: <br>
+        Поделитесь этой ссылкой с соперником: <br>
         <strong id="game-url">Генерация ссылки...</strong>
     </div>
 
@@ -106,22 +102,13 @@
     const isHost = !roomId; 
 
     if (isHost) {
-        roomId = 'rm' + Math.random().toString(36).substring(2, 10);
+        roomId = 'room-' + Math.random().toString(36).substring(2, 10);
         window.history.pushState({}, '', window.location.pathname + '?room=' + roomId);
     }
     document.getElementById('game-url').textContent = window.location.href;
 
     let myColor = isHost ? 'white' : 'black';
-    let lastMoveId = 0; 
-
-    // Инициализируем абсолютно независимый P2P-узел GunDB (Mesh сеть без центрального сервера)
-    // Используются три дублирующих публичных шлюза, устойчивых к блокировкам
-    const gun = Gun([
-        'https://herokuapp.com',
-        'https://pagefront.app',
-        'https://oasys.land'
-    ]);
-    const gameRoom = gun.get('chess-p2p-mesh-' + roomId);
+    let client = null;
 
     const pieces = {
         'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚', 'p': '♟',
@@ -165,20 +152,33 @@
         };
 
         roleElement.textContent = myColor === 'white' ? "Вы играете за: БЕЛЫЕ" : "Вы играете за: ЧЕРНЫЕ (Доска перевернута)";
-        updateUI();
+        createBoard();
 
-        // СЛУШАТЕЛЬ СЕТИ P2P: Срабатывает автоматически в режиме реального времени
-        gameRoom.on(function(data) {
-            if (data && data.player && data.player !== myColor && data.mId !== lastMoveId) {
-                lastMoveId = data.mId;
-                executeMoveLocal(parseInt(data.fR), parseInt(data.fC), parseInt(data.tR), parseInt(data.tC), data.mType);
-            }
-        });
+        // Подключаемся к полностью бесплатному и открытому брокеру через защищенный WebSocket-протокол wss
+        try {
+            client = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
+
+            client.on('connect', () => {
+                client.subscribe(roomId);
+                if (!isGameOver) {
+                    statusElement.textContent = currentTurn === myColor ? 'Ваш ход!' : 'Ожидание хода соперника...';
+                }
+            });
+
+            client.on('message', (topic, message) => {
+                const data = JSON.parse(message.toString());
+                if (data.player !== myColor) {
+                    executeMoveLocal(data.fR, data.fC, data.tR, data.tC, data.mType);
+                }
+            });
+        } catch(e) {
+            statusElement.textContent = "Ошибка сети. Перезагрузите страницу.";
+        }
     }
 
     function updateUI() {
         if (!isGameOver) {
-            statusElement.textContent = currentTurn === myColor ? 'Ваш ход!' : 'Ожидание хода соперника (в реальном времени)...';
+            statusElement.textContent = currentTurn === myColor ? 'Ваш ход!' : 'Ожидание хода соперника...';
         }
         capBlackElement.textContent = capturedByBlack.join(' ');
         capWhiteElement.textContent = capturedByWhite.join(' ');
@@ -212,7 +212,7 @@
     }
 
     function handleCellClick(row, col) {
-        if (isGameOver || currentTurn !== myColor) return;
+        if (isGameOver || currentTurn !== myColor || !client || !client.connected) return;
 
         const piece = boardState[row][col];
         const isWhitePiece = piece !== '' && piece === piece.toUpperCase();
@@ -225,19 +225,17 @@
         } else {
             const move = validMoves.find(m => m.row === row && m.col === col);
             if (move) {
-                const moveId = Date.now();
-                lastMoveId = moveId;
-
-                // ОТПРАВКА В СЕТЬ: Данные улетают в распределенный P2P-граф напрямую
-                gameRoom.put({
+                const moveData = {
                     fR: selectedCell.row,
                     fC: selectedCell.col,
                     tR: row,
                     tC: col,
                     mType: move.type,
-                    player: myColor,
-                    mId: moveId
-                });
+                    player: myColor
+                };
+
+                // Отправляем ход в топик комнаты мгновенно
+                client.publish(roomId, JSON.stringify(moveData));
 
                 executeMoveLocal(selectedCell.row, selectedCell.col, row, col, move.type);
                 resetSelection();
@@ -271,8 +269,6 @@
     }
 
     function executeMoveLocal(fromRow, fromCol, toRow, toCol, moveType) {
-        if (fromRow === -1) return; // Пропуск технического пакета инициализации сети
-        
         let piece = boardState[fromRow][fromCol];
         const targetPiece = boardState[toRow][toCol];
 
@@ -391,8 +387,6 @@
     }
 
     initGame();
-    // Технический пакет для прогрева P2P ячеек
-    if(isHost) gameRoom.put({fR: -1, fC: -1, tR: -1, tC: -1, mType: 'init', player: 'system', mId: 1});
 </script>
 </body>
 </html>
