@@ -156,7 +156,7 @@
 
         // Подключаемся к полностью бесплатному и открытому брокеру через защищенный WebSocket-протокол wss
         try {
-            client = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
+            client = mqtt.connect('wss://://hivemq.com');
 
             client.on('connect', () => {
                 client.subscribe(roomId);
