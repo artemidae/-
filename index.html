@@ -3,9 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Настоящие Шахматы Онлайн (PubNub)</title>
-    <!-- Подключаем официальную библиотеку PubNub для мгновенной связи -->
-    <script src="https://pubnub.com"></script>
+    <title>Настоящие Шахматы Онлайн (Максимально Стабильные)</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, Arial, sans-serif;
@@ -84,8 +82,8 @@
 </head>
 <body>
 
-    <div id="status">Загрузка доски...</div>
-    <div id="role">Определение роли...</div>
+    <div id="status">Инициализация доски...</div>
+    <div id="role">Определение цвета...</div>
     
     <div id="captured-by-black" class="captured-container"></div>
     <div id="board"></div>
@@ -101,20 +99,15 @@
     let roomId = urlParams.get('room');
     const isHost = !roomId; 
 
+    // Создаем фиксированный ID объекта для этой комнаты на REST-сервере
     if (isHost) {
-        roomId = 'room-' + Math.random().toString(36).substring(2, 10);
+        roomId = 'chess-' + Math.random().toString(36).substring(2, 10);
         window.history.pushState({}, '', window.location.pathname + '?room=' + roomId);
     }
     document.getElementById('game-url').textContent = window.location.href;
 
     let myColor = isHost ? 'white' : 'black';
-
-    // Инициализация бесплатного публичного клиента PubNub
-    const pubnub = new PubNub({
-        publishKey: 'pub-c-42b78121-a20c-4fa7-872f-917fc9957778',
-        subscribeKey: 'sub-c-17937a3a-cb28-4efc-8e4d-045053b95a8e',
-        userId: 'user-' + Math.random().toString(36).substring(2, 6)
-    });
+    let lastMoveId = 0; 
 
     const pieces = {
         'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚', 'p': '♟',
@@ -159,19 +152,9 @@
 
         roleElement.textContent = myColor === 'white' ? "Вы играете за: БЕЛЫЕ" : "Вы играете за: ЧЕРНЫЕ (Доска перевернута)";
         updateUI();
-
-        // Подключаемся к комнате и слушаем сообщения в реальном времени
-        pubnub.addListener({
-            message: function(event) {
-                const data = event.message;
-                // Игнорируем свои собственные сообщения, обрабатываем только чужие
-                if (data.player !== myColor) {
-                    executeMoveLocal(data.fR, data.fC, data.tR, data.tC, data.mType);
-                }
-            }
-        });
-
-        pubnub.subscribe({ channels: [roomId] });
+        
+        // Каждую секунду автоматически запрашиваем состояние игры из облака
+        setInterval(listenForMoves, 1000);
     }
 
     function updateUI() {
@@ -185,8 +168,6 @@
 
     function createBoard() {
         boardElement.innerHTML = '';
-        
-        // Для Чёрных переворачиваем доску визуально, чтобы фигуры шли снизу вверх
         for (let i = 0; i < 64; i++) {
             const index = myColor === 'black' ? 63 - i : i;
             const row = Math.floor(index / 8);
@@ -225,13 +206,8 @@
         } else {
             const move = validMoves.find(m => m.row === row && m.col === col);
             if (move) {
-                // Отправляем ход в сеть
-                pubnub.publish({
-                    channel: roomId,
-                    message: { fR: selectedCell.row, fC: selectedCell.col, tR: row, tC: col, mType: move.type, player: myColor }
-                });
-
                 executeMoveLocal(selectedCell.row, selectedCell.col, row, col, move.type);
+                sendMoveToServer(selectedCell.row, selectedCell.col, row, col, move.type);
                 resetSelection();
             } else if ((currentTurn === 'white' && isWhitePiece) || (currentTurn === 'black' && isBlackPiece)) {
                 selectPiece(row, col);
@@ -244,8 +220,6 @@
     function selectPiece(row, col) {
         resetSelection();
         selectedCell = { row, col };
-        
-        // Поиск ячейки на доске с учётом возможного переворота
         const targetIndex = row * 8 + col;
         const uiIndex = myColor === 'black' ? 63 - targetIndex : targetIndex;
         boardElement.children[uiIndex].classList.add('selected');
@@ -313,6 +287,48 @@
         updateUI();
     }
 
+    // ОТПРАВКА ХОДА НА HTTP-СЕРВЕР
+    function sendMoveToServer(fR, fC, tR, tC, mType) {
+        const moveId = Date.now();
+        lastMoveId = moveId;
+
+        const payload = {
+            name: roomId,
+            data: { fR, fC, tR, tC, mType, mId: moveId, player: myColor }
+        };
+
+        // Отправляем обычный POST-запрос, который никогда не блокируется
+        fetch('https://restful-api.dev', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        }).catch(e => console.log("Ошибка сети"));
+    }
+
+    // ПРИЕМ ХОДА ИЗ ОБЛАКА
+    function listenForMoves() {
+        if (currentTurn === myColor || isGameOver) return;
+
+        // Делаем стандартный GET-запрос для проверки обновлений
+        fetch('https://restful-api.dev?id=' + roomId)
+            .then(res => res.json())
+            .then(res => {
+                if (res && res.length > 0 && res[0].data) {
+                    const data = res[0].data;
+                    if (data.player && data.player !== myColor && data.mId !== lastMoveId) {
+                        lastMoveId = data.mId;
+                        executeMoveLocal(parseInt(data.fR), parseInt(data.fC), parseInt(data.tR), parseInt(data.tC), data.mType);
+                    }
+                }
+            })
+            .catch(e => {
+                // Если объект комнаты еще не создан на сервере, создаем его пустым стартовым запросом
+                if (isHost && lastMoveId === 0) {
+                    sendMoveToServer(-1, -1, -1, -1, 'init');
+                }
+            });
+    }
+
     function calculateValidMoves(row, col) {
         const piece = boardState[row][col];
         const type = piece.toLowerCase();
@@ -320,9 +336,9 @@
         let moves = [];
 
         const directions = {
-            r: [, [-1,0],, [0,-1]],
-            b: [, [1,-1], [-1,1], [-1,-1]],
-            q: [, [-1,0],, [0,-1],, [1,-1], [-1,1], [-1,-1]]
+            r: [[1,0], [-1,0], [0,1], [0,-1]],
+            b: [[1,1], [1,-1], [-1,1], [-1,-1]],
+            q: [[1,0], [-1,0], [0,1], [0,-1], [1,1], [1,-1], [-1,1], [-1,-1]]
         };
 
         function checkTarget(r, c) {
@@ -359,24 +375,24 @@
         }
 
         if (type === 'n') {
-            [,[2,-1],[-2,1],[-2,-1],,[1,-2],[-1,2],[-1,-2]].forEach(([dr, dc]) => {
+            [[2,1], [2,-1], [-2,1], [-2,-1], [1,2], [1,-2], [-1,2], [-1,-2]].forEach(([dr, dc]) => {
                 const res = checkTarget(row + dr, col + dc);
                 if (res === 'empty' || res === 'enemy') moves.push({ row: row + dr, col: col + dc, type: 'normal' });
             });
         }
 
         if (type === 'k') {
-            [,[-1,0],,[0,-1], PierQueryResult,[1,-1],[-1,1],[-1,-1]].forEach(([dr, dc]) => {
+            [[1,0], [-1,0], [0,1], [0,-1], [1,1], [1,-1], [-1,1], [-1,-1]].forEach(([dr, dc]) => {
                 const res = checkTarget(row + dr, col + dc);
                 if (res === 'empty' || res === 'enemy') moves.push({ row: row + dr, col: col + dc, type: 'normal' });
             });
 
             if (isWhite && !movedState.whiteKing) {
-                if (!movedState.whiteRightRook && boardState === '' && boardState === '') moves.push({ row: 7, col: 6, type: 'castling-short' });
-                if (!movedState.whiteLeftRook && boardState === '' && boardState === '' && boardState === '') moves.push({ row: 7, col: 2, type: 'castling-long' });
+                if (!movedState.whiteRightRook && boardState[7][5] === '' && boardState[7][6] === '') moves.push({ row: 7, col: 6, type: 'castling-short' });
+                if (!movedState.whiteLeftRook && boardState[7][1] === '' && boardState[7][2] === '' && boardState[7][3] === '') moves.push({ row: 7, col: 2, type: 'castling-long' });
             } else if (!isWhite && !movedState.blackKing) {
-                if (!movedState.blackRightRook && boardState === '' && boardState === '') moves.push({ row: 0, col: 6, type: 'castling-short' });
-                if (!movedState.blackLeftRook && boardState === '' && boardState === '' && boardState === '') moves.push({ row: 0, col: 2, type: 'castling-long' });
+                if (!movedState.blackRightRook && boardState[0][5] === '' && boardState[0][6] === '') moves.push({ row: 0, col: 6, type: 'castling-short' });
+                if (!movedState.blackLeftRook && boardState[0][1] === '' && boardState[0][2] === '' && boardState[0][3] === '') moves.push({ row: 0, col: 2, type: 'castling-long' });
             }
         }
         return moves;
