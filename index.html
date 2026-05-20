@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Настоящие Шахматы Онлайн (Исправлено)</title>
+    <title>Настоящие Шахматы Онлайн (PubNub)</title>
+    <!-- Подключаем официальную библиотеку PubNub для мгновенной связи -->
+    <script src="https://pubnub.com"></script>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, Arial, sans-serif;
@@ -106,7 +108,13 @@
     document.getElementById('game-url').textContent = window.location.href;
 
     let myColor = isHost ? 'white' : 'black';
-    let lastMoveId = 0; 
+
+    // Инициализация бесплатного публичного клиента PubNub
+    const pubnub = new PubNub({
+        publishKey: 'pub-c-42b78121-a20c-4fa7-872f-917fc9957778',
+        subscribeKey: 'sub-c-17937a3a-cb28-4efc-8e4d-045053b95a8e',
+        userId: 'user-' + Math.random().toString(36).substring(2, 6)
+    });
 
     const pieces = {
         'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚', 'p': '♟',
@@ -149,11 +157,21 @@
             blackKing: false, blackLeftRook: false, blackRightRook: false
         };
 
-        roleElement.textContent = myColor === 'white' ? "Вы играете за: БЕЛЫЕ" : "Вы играете за: ЧЕРНЫЕ";
+        roleElement.textContent = myColor === 'white' ? "Вы играете за: БЕЛЫЕ" : "Вы играете за: ЧЕРНЫЕ (Доска перевернута)";
         updateUI();
-        
-        // Опрос нового стабильного сервера dweet.cc каждую секунду
-        setInterval(listenForMoves, 1000);
+
+        // Подключаемся к комнате и слушаем сообщения в реальном времени
+        pubnub.addListener({
+            message: function(event) {
+                const data = event.message;
+                // Игнорируем свои собственные сообщения, обрабатываем только чужие
+                if (data.player !== myColor) {
+                    executeMoveLocal(data.fR, data.fC, data.tR, data.tC, data.mType);
+                }
+            }
+        });
+
+        pubnub.subscribe({ channels: [roomId] });
     }
 
     function updateUI() {
@@ -167,25 +185,29 @@
 
     function createBoard() {
         boardElement.innerHTML = '';
-        for (let row = 0; row < 8; row++) {
-            for (let col = 0; col < 8; col++) {
-                const cell = document.createElement('div');
-                cell.classList.add('cell');
-                cell.classList.add((row + col) % 2 === 0 ? 'white-cell' : 'black-cell');
-                
-                const piece = boardState[row][col];
-                cell.textContent = pieces[piece];
-                
-                if (piece === piece.toUpperCase() && piece !== '') {
-                    cell.style.color = '#fff';
-                    cell.style.textShadow = '0 0 3px #000';
-                } else {
-                    cell.style.color = '#000';
-                }
+        
+        // Для Чёрных переворачиваем доску визуально, чтобы фигуры шли снизу вверх
+        for (let i = 0; i < 64; i++) {
+            const index = myColor === 'black' ? 63 - i : i;
+            const row = Math.floor(index / 8);
+            const col = index % 8;
 
-                cell.addEventListener('click', () => handleCellClick(row, col));
-                boardElement.appendChild(cell);
+            const cell = document.createElement('div');
+            cell.classList.add('cell');
+            cell.classList.add((row + col) % 2 === 0 ? 'white-cell' : 'black-cell');
+            
+            const piece = boardState[row][col];
+            cell.textContent = pieces[piece];
+            
+            if (piece === piece.toUpperCase() && piece !== '') {
+                cell.style.color = '#fff';
+                cell.style.textShadow = '0 0 3px #000';
+            } else {
+                cell.style.color = '#000';
             }
+
+            cell.addEventListener('click', () => handleCellClick(row, col));
+            boardElement.appendChild(cell);
         }
     }
 
@@ -203,8 +225,13 @@
         } else {
             const move = validMoves.find(m => m.row === row && m.col === col);
             if (move) {
+                // Отправляем ход в сеть
+                pubnub.publish({
+                    channel: roomId,
+                    message: { fR: selectedCell.row, fC: selectedCell.col, tR: row, tC: col, mType: move.type, player: myColor }
+                });
+
                 executeMoveLocal(selectedCell.row, selectedCell.col, row, col, move.type);
-                sendMoveToServer(selectedCell.row, selectedCell.col, row, col, move.type);
                 resetSelection();
             } else if ((currentTurn === 'white' && isWhitePiece) || (currentTurn === 'black' && isBlackPiece)) {
                 selectPiece(row, col);
@@ -217,12 +244,17 @@
     function selectPiece(row, col) {
         resetSelection();
         selectedCell = { row, col };
-        const index = row * 8 + col;
-        boardElement.children[index].classList.add('selected');
+        
+        // Поиск ячейки на доске с учётом возможного переворота
+        const targetIndex = row * 8 + col;
+        const uiIndex = myColor === 'black' ? 63 - targetIndex : targetIndex;
+        boardElement.children[uiIndex].classList.add('selected');
+        
         validMoves = calculateValidMoves(row, col);
         validMoves.forEach(move => {
-            const moveIndex = move.row * 8 + move.col;
-            boardElement.children[moveIndex].classList.add('valid-move');
+            const moveIdx = move.row * 8 + move.col;
+            const uiMoveIdx = myColor === 'black' ? 63 - moveIdx : moveIdx;
+            boardElement.children[uiMoveIdx].classList.add('valid-move');
         });
     }
 
@@ -281,37 +313,6 @@
         updateUI();
     }
 
-    // Отправка хода на dweet.cc
-    function sendMoveToServer(fR, fC, tR, tC, mType) {
-        const moveId = Date.now();
-        lastMoveId = moveId;
-
-        const url = `https://dweet.cc{roomId}?fR=${fR}&fC=${fC}&tR=${tR}&tC=${tC}&mType=${mType}&mId=${moveId}&player=${myColor}`;
-        
-        fetch(url).catch(e => console.log("Ошибка отправки"));
-    }
-
-    // Прием хода (с защитой от кэширования Safari iOS)
-    function listenForMoves() {
-        if (currentTurn === myColor || isGameOver) return;
-
-        // Добавляем к URL уникальный штамп времени, чтобы заставить Safari качать новые данные
-        const timestamp = Date.now();
-        fetch(`https://dweet.cc{roomId}?_nocache=${timestamp}`)
-            .then(res => res.json())
-            .then(res => {
-                if (res.with && res.with.length > 0) {
-                    const data = res.with[0].content; // Исправлен разбор структуры массива ответов dweet
-                    
-                    if (data.player && data.player !== myColor && data.mId !== lastMoveId) {
-                        lastMoveId = data.mId;
-                        executeMoveLocal(parseInt(data.fR), parseInt(data.fC), parseInt(data.tR), parseInt(data.tC), data.mType);
-                    }
-                }
-            })
-            .catch(e => console.log("Ошибка получения"));
-    }
-
     function calculateValidMoves(row, col) {
         const piece = boardState[row][col];
         const type = piece.toLowerCase();
@@ -319,9 +320,9 @@
         let moves = [];
 
         const directions = {
-            r: [[1,0], [-1,0], [0,1], [0,-1]],
-            b: [[1,1], [1,-1], [-1,1], [-1,-1]],
-            q: [[1,0], [-1,0], [0,1], [0,-1], [1,1], [1,-1], [-1,1], [-1,-1]]
+            r: [, [-1,0],, [0,-1]],
+            b: [, [1,-1], [-1,1], [-1,-1]],
+            q: [, [-1,0],, [0,-1],, [1,-1], [-1,1], [-1,-1]]
         };
 
         function checkTarget(r, c) {
@@ -358,24 +359,24 @@
         }
 
         if (type === 'n') {
-            [[2,1],[2,-1],[-2,1],[-2,-1],[1,2],[1,-2],[-1,2],[-1,-2]].forEach(([dr, dc]) => {
+            [,[2,-1],[-2,1],[-2,-1],,[1,-2],[-1,2],[-1,-2]].forEach(([dr, dc]) => {
                 const res = checkTarget(row + dr, col + dc);
                 if (res === 'empty' || res === 'enemy') moves.push({ row: row + dr, col: col + dc, type: 'normal' });
             });
         }
 
         if (type === 'k') {
-            [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]].forEach(([dr, dc]) => {
+            [,[-1,0],,[0,-1], PierQueryResult,[1,-1],[-1,1],[-1,-1]].forEach(([dr, dc]) => {
                 const res = checkTarget(row + dr, col + dc);
                 if (res === 'empty' || res === 'enemy') moves.push({ row: row + dr, col: col + dc, type: 'normal' });
             });
 
             if (isWhite && !movedState.whiteKing) {
-                if (!movedState.whiteRightRook && boardState[7][5] === '' && boardState[7][6] === '') moves.push({ row: 7, col: 6, type: 'castling-short' });
-                if (!movedState.whiteLeftRook && boardState[7][1] === '' && boardState[7][2] === '' && boardState[7][3] === '') moves.push({ row: 7, col: 2, type: 'castling-long' });
+                if (!movedState.whiteRightRook && boardState === '' && boardState === '') moves.push({ row: 7, col: 6, type: 'castling-short' });
+                if (!movedState.whiteLeftRook && boardState === '' && boardState === '' && boardState === '') moves.push({ row: 7, col: 2, type: 'castling-long' });
             } else if (!isWhite && !movedState.blackKing) {
-                if (!movedState.blackRightRook && boardState[0][5] === '' && boardState[0][6] === '') moves.push({ row: 0, col: 6, type: 'castling-short' });
-                if (!movedState.blackLeftRook && boardState[0][1] === '' && boardState[0][2] === '' && boardState[0][3] === '') moves.push({ row: 0, col: 2, type: 'castling-long' });
+                if (!movedState.blackRightRook && boardState === '' && boardState === '') moves.push({ row: 0, col: 6, type: 'castling-short' });
+                if (!movedState.blackLeftRook && boardState === '' && boardState === '' && boardState === '') moves.push({ row: 0, col: 2, type: 'castling-long' });
             }
         }
         return moves;
