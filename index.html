@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <!-- Запрещаем масштабирование в Safari iOS при частых кликах -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Мультиплеерные Шахматы Онлайн</title>
+    <!-- Подключаем библиотеку Supabase для онлайн-синхронизации -->
+    <script src="https://jsdelivr.net"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #f0f0f0;
+            margin: 10px;
+            /* Убираем задержку клика и выделение в iOS Safari */
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        #status {
+            font-size: 20px;
+            margin-bottom: 3px;
+            font-weight: bold;
+            text-align: center;
+        }
+        #role {
+            font-size: 14px;
+            color: #555;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+        .captured-container {
+            font-size: 22px;
+            height: 30px;
+            margin: 2px 0;
+            letter-spacing: 2px;
+            width: 100%;
+            max-width: 360px;
+            text-align: center;
+            overflow: hidden;
+            white-space: nowrap;
+        }
+        #captured-by-black { color: #fff; text-shadow: 0 0 3px #000; }
+        #captured-by-white { color: #000; }
+        
+        /* Адаптивная доска под размеры iPhone */
+        #board {
+            display: grid;
+            grid-template-columns: repeat(8, min(11vw, 45px));
+            grid-template-rows: repeat(8, min(11vw, 45px));
+            border: 3px solid #333;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.3);
+            margin: 5px 0;
+        }
+        .cell {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: min(8vw, 32px); /* Фигуры масштабируются под экран */
+            cursor: pointer;
+            user-select: none;
+            -webkit-user-select: none;
+            transition: background-color 0.1s;
+        }
+        .white-cell { background-color: #f0d9b5; }
+        .black-cell { background-color: #b58863; }
+        .selected { background-color: #7ab2e0 !important; }
+        .valid-move { background-color: #acd1a8 !important; }
+        
+        #link-box {
+            margin-top: 15px;
+            padding: 10px;
+            background: #fff;
+            border: 1px dashed #777;
+            border-radius: 4px;
+            font-size: 12px;
+            width: 90%;
+            max-width: 340px;
+            word-break: break-all;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="status">Подключение к сети...</div>
+    <div id="role">Определение вашей роли...</div>
+    
+    <div id="captured-by-black" class="captured-container"></div>
+    <div id="board"></div>
+    <div id="captured-by-white" class="captured-container"></div>
+    
+    <div id="link-box">
+        Поделитесь этой ссылкой для игры на iPhone / ПК: <br>
+        <strong id="game-url">Загрузка ссылки...</strong>
+    </div>
+
+<script>
+    // Публичные ключи Supabase
+    const SUBABASE_URL = "https://supabase.co";
+    const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind6c2N2c21ieWdjb2lzZ3NodnNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MTY0NTAwMDAsImV4cCI6MjAyMjAxMDAwMH0.1v7fX_X1_ZEx_X1_ZEx_X1_ZEx_X1_ZEx_X1_ZEx_X1_ZEx";
+    
+    // Исправление для Safari iOS: правильная инициализация клиента
+    const supabaseClient = supabase.createClient(SUBABASE_URL, SUPABASE_KEY);
+
+    // Парсинг параметров URL, совместимый со всеми версиями мобильного Safari
+    let roomId = null;
+    try {
+        const urlParams = new URLSearchParams(window.location.search);
+        roomId = urlParams.get('room');
+    } catch(e) {
+        // Запасной вариант для старых iOS
+        const match = window.location.search.match(/[?&]room=([^&]+)/);
+        if (match) roomId = match[1];
+    }
+
+    if (!roomId) {
+        roomId = Math.random().toString(36).substring(2, 9);
+        try {
+            window.history.pushState({}, '', window.location.pathname + '?room=' + roomId);
+        } catch(e) {}
+    }
+    document.getElementById('game-url').textContent = window.location.href;
+
+    const pieces = {
+        'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚', 'p': '♟',
+        'R': '♖', 'N': '♘', 'B': '♗', 'Q': '♕', 'K': '♔', 'P': '♙', '': ''
+    };
+
+    let boardState, currentTurn, selectedCell, validMoves, isGameOver;
+    let capturedByWhite = [];
+    let capturedByBlack = [];
+    let myColor = 'spectator'; 
+    const myId = Math.random().toString(36).substring(2, 9);
+
+    let movedState = {
+        whiteKing: false, whiteLeftRook: false, whiteRightRook: false,
+        blackKing: false, blackLeftRook: false, blackRightRook: false
+    };
+
+    const boardElement = document.getElementById('board');
+    const statusElement = document.getElementById('status');
+    const roleElement = document.getElementById('role');
+    const capWhiteElement = document.getElementById('captured-by-white');
+    const capBlackElement = document.getElementById('captured-by-black');
+
+    function resetLocalState() {
+        boardState = [
+            ['r', 'n', 'b', 'q', 'k', 'b', 'n', 'r'],
+            ['p', 'p', 'p', 'p', 'p', 'p', 'p', 'p'],
+            ['', '', '', '', '', '', '', ''],
+            ['', '', '', '', '', '', '', ''],
+            ['', '', '', '', '', '', '', ''],
+            ['', '', '', '', '', '', '', ''],
+            ['P', 'P', 'P', 'P', 'P', 'P', 'P', 'P'],
+            ['R', 'N', 'B', 'Q', 'K', 'B', 'N', 'R']
+        ];
+        currentTurn = 'white';
+        selectedCell = null;
+        validMoves = [];
+        isGameOver = false;
+        capturedByWhite = [];
+        capturedByBlack = [];
+        movedState = {
+            whiteKing: false, whiteLeftRook: false, whiteRightRook: false,
+            blackKing: false, blackLeftRook: false, blackRightRook: false
+        };
+    }
+
+    // Подключение к комнате через правильный клиент
+    const channel = supabaseClient.channel(`room-${roomId}`, {
+        config: { presence: { key: 'userId' } }
+    });
+
+    channel
+        .on('presence', { event: 'sync' }, () => {
+            const state = channel.presenceState();
+            const presences = Object.values(state).flat();
+            
+            if (myColor === 'spectator') {
+                const myPresIndex = presences.findIndex(p => p.id === myId);
+                if (myPresIndex === 0) {
+                    myColor = 'white';
+                    roleElement.textContent = "Ваш цвет: БЕЛЫЕ";
+                } else if (myPresIndex === 1) {
+                    myColor = 'black';
+                    roleElement.textContent = "Ваш цвет: ЧЕРНЫЕ";
+                } else {
+                    roleElement.textContent = "Вы: Наблюдатель";
+                }
+            }
+        })
+        .on('broadcast', { event: 'move' }, ({ payload }) => {
+            executeMoveData(payload.fromRow, payload.fromCol, payload.toRow, payload.toCol, payload.type);
+        })
+        .subscribe(async (status) => {
+            if (status === 'SUBSCRIBED') {
+                resetLocalState();
+                updateUI();
+                await channel.track({ id: myId });
+            }
+        });
+
+    function updateUI() {
+        if (!isGameOver) {
+            statusElement.textContent = currentTurn === 'white' ? 'Ход белых' : 'Ход черных';
+        }
+        capBlackElement.textContent = capturedByBlack.join(' ');
+        capWhiteElement.textContent = capturedByWhite.join(' ');
+        createBoard();
+    }
+
+    function createBoard() {
+        boardElement.innerHTML = '';
+        for (let row = 0; row < 8; row++) {
+            for (let col = 0; col < 8; col++) {
+                const cell = document.createElement('div');
+                cell.classList.add('cell');
+                cell.classList.add((row + col) % 2 === 0 ? 'white-cell' : 'black-cell');
+                
+                const piece = boardState[row][col];
+                cell.textContent = pieces[piece];
+                
+                if (piece === piece.toUpperCase() && piece !== '') {
+                    cell.style.color = '#fff';
+                    cell.style.textShadow = '0 0 3px #000';
+                } else {
+                    cell.style.color = '#000';
+                }
+
+                // Используем click, но с touch-action стилями в CSS для отзывчивости на iOS
+                cell.addEventListener('click', () => handleCellClick(row, col));
+                boardElement.appendChild(cell);
+            }
+        }
+    }
+
+    function handleCellClick(row, col) {
+        if (isGameOver || myColor === 'spectator' || currentTurn !== myColor) return;
+
+        const piece = boardState[row][col];
+        const isWhitePiece = piece !== '' && piece === piece.toUpperCase();
+        const isBlackPiece = piece !== '' && piece === piece.toLowerCase();
+
+        if (selectedCell === null) {
+            if ((currentTurn === 'white' && isWhitePiece) || (currentTurn === 'black' && isBlackPiece)) {
+                selectPiece(row, col);
+            }
+        } else {
+            const move = validMoves.find(m => m.row === row && m.col === col);
+            if (move) {
+                executeMoveData(selectedCell.row, selectedCell.col, row, col, move.type);
+                
+                channel.send({
+                    type: 'broadcast',
+                    event: 'move',
+                    payload: { fromRow: selectedCell.row, fromCol: selectedCell.col, toRow: row, toCol: col, type: move.type }
+                });
+                
+                resetSelection();
+            } else if ((currentTurn === 'white' && isWhitePiece) || (currentTurn === 'black' && isBlackPiece)) {
+                selectPiece(row, col);
+            } else {
+                resetSelection();
+            }
+        }
+    }
+
+    function selectPiece(row, col) {
+        resetSelection();
+        selectedCell = { row, col };
+        const index = row * 8 + col;
+        boardElement.children[index].classList.add('selected');
+        validMoves = calculateValidMoves(row, col);
+        validMoves.forEach(move => {
+            const moveIndex = move.row * 8 + move.col;
+            boardElement.children[moveIndex].classList.add('valid-move');
+        });
+    }
+
+    function resetSelection() {
+        selectedCell = null;
+        validMoves = [];
+        Array.from(boardElement.children).forEach(cell => cell.classList.remove('selected', 'valid-move'));
+    }
+
+    function executeMoveData(fromRow, fromCol, toRow, toCol, moveType) {
+        let piece = boardState[fromRow][fromCol];
+        const targetPiece = boardState[toRow][toCol];
+
+        if (targetPiece !== '') {
+            if (targetPiece === targetPiece.toUpperCase()) {
+                capturedByBlack.push(pieces[targetPiece]);
+            } else {
+                capturedByWhite.push(pieces[targetPiece]);
+            }
+        }
+
+        if (targetPiece.toLowerCase() === 'k') {
+            boardState[toRow][toCol] = piece;
+            boardState[fromRow][fromCol] = '';
+            isGameOver = true;
+            statusElement.textContent = currentTurn === 'white' ? 'Белые победили!' : 'Черные победили!';
+            updateUI();
+            return;
+        }
+
+        if (moveType === 'castling-short') {
+            boardState[toRow][toCol] = piece;
+            boardState[fromRow][fromCol] = '';
+            boardState[toRow][toCol-1] = boardState[toRow][7];
+            boardState[toRow][7] = '';
+        } else if (moveType === 'castling-long') {
+            boardState[toRow][toCol] = piece;
+            boardState[fromRow][fromCol] = '';
+            boardState[toRow][toCol+1] = boardState[toRow][0];
+            boardState[toRow][0] = '';
+        } else {
+            if (piece === 'P' && toRow === 0) piece = 'Q';
+            if (piece === 'p' && toRow === 7) piece = 'q';
+            boardState[toRow][toCol] = piece;
+            boardState[fromRow][fromCol] = '';
+        }
+
+        if (fromRow === 7 && fromCol === 4) movedState.whiteKing = true;
+        if (fromRow === 7 && fromCol === 0) movedState.whiteLeftRook = true;
+        if (fromRow === 7 && fromCol === 7) movedState.whiteRightRook = true;
+        if (fromRow === 0 && fromCol === 4) movedState.blackKing = true;
+        if (fromRow === 0 && fromCol === 0) movedState.blackLeftRook = true;
+        if (fromRow === 0 && fromCol === 7) movedState.blackRightRook = true;
+
+        currentTurn = currentTurn === 'white' ? 'black' : 'white';
+        updateUI();
+    }
+
+    function calculateValidMoves(row, col) {
+        const piece = boardState[row][col];
+        const type = piece.toLowerCase();
+        const isWhite = piece === piece.toUpperCase();
+        let moves = [];
+
+        const directions = {
+            r: [[1,0], [-1,0], [0,1], [0,-1]],
+            b: [[1,1], [1,-1], [-1,1], [-1,-1]],
+            q: [[1,0], [-1,0], [0,1], [0,-1], [1,1], [1,-1], [-1,1], [-1,-1]]
+        };
+
+        function checkTarget(r, c) {
+            if (r < 0 || r > 7 || c < 0 || c > 7) return 'out';
+            const target = boardState[r][c];
+            if (target === '') return 'empty';
+            return isWhite === (target === target.toUpperCase()) ? 'ally' : 'enemy';
+        }
+
+        if (type === 'p') {
+            const dir = isWhite ? -1 : 1;
+            if (checkTarget(row + dir, col) === 'empty') {
+                moves.push({ row: row + dir, col, type: 'normal' });
+                if (row === (isWhite ? 6 : 1) && checkTarget(row + dir * 2, col) === 'empty') {
+                    moves.push({ row: row + dir * 2, col, type: 'normal' });
+                }
+            }
+            [-1, 1].forEach(side => {
+                if (checkTarget(row + dir, col + side) === 'enemy') moves.push({ row: row + dir, col: col + side, type: 'normal' });
+            });
+        }
+
+        if (['r', 'b', 'q'].includes(type)) {
+            directions[type].forEach(([dr, dc]) => {
+                let r = row + dr, c = col + dc;
+                while (true) {
+                    const res = checkTarget(r, c);
+                    if (res === 'empty') moves.push({ row: r, col: c, type: 'normal' });
+                    else if (res === 'enemy') { moves.push({ row: r, col: c, type: 'normal' }); break; }
+                    else break;
+                    r += dr; c += dc;
+                }
+            });
+        }
+
+        if (type === 'n') {
+            [[2,1],[2,-1],[-2,1],[-2,-1],[1,2],[1,-2],[-1,2],[-1,-2]].forEach(([dr, dc]) => {
+                const res = checkTarget(row + dr, col + dc);
+                if (res === 'empty' || res === 'enemy') moves.push({ row: row + dr, col: col + dc, type: 'normal' });
+            });
+        }
+
+        if (type === 'k') {
+            [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]].forEach(([dr, dc]) => {
+                const res = checkTarget(row + dr, col + dc);
+                if (res === 'empty' || res === 'enemy') moves.push({ row: row + dr, col: col + dc, type: 'normal' });
+            });
+
+            if (isWhite && !movedState.whiteKing) {
+                if (!movedState.whiteRightRook && boardState[7][5] === '' && boardState[7][6] === '') moves.push({ row: 7, col: 6, type: 'castling-short' });
+                if (!movedState.whiteLeftRook && boardState[7][1] === '' && boardState[7][2] === '' && boardState[7][3] === '') moves.push({ row: 7, col: 2, type: 'castling-long' });
+            } else if (!isWhite && !movedState.blackKing) {
+                if (!movedState.blackRightRook && boardState[0][5] === '' && boardState[0][6] === '') moves.push({ row: 0, col: 6, type: 'castling-short' });
+                if (!movedState.blackLeftRook && boardState[0][1] === '' && boardState[0][2] === '' && boardState[0][3] === '') moves.push({ row: 0, col: 2, type: 'castling-long' });
+            }
+        }
+        return moves;
+    }
+</script>
+</body>
+</html>
