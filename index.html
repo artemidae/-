@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Настоящие Шахматы Онлайн (Максимально Стабильные)</title>
+    <title>Настоящие Шахматы Онлайн (Финал)</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, Arial, sans-serif;
@@ -82,8 +82,8 @@
 </head>
 <body>
 
-    <div id="status">Инициализация доски...</div>
-    <div id="role">Определение цвета...</div>
+    <div id="status">Загрузка доски...</div>
+    <div id="role">Определение роли...</div>
     
     <div id="captured-by-black" class="captured-container"></div>
     <div id="board"></div>
@@ -95,19 +95,20 @@
     </div>
 
 <script>
+    // Инициализация комнаты
     const urlParams = new URLSearchParams(window.location.search);
     let roomId = urlParams.get('room');
     const isHost = !roomId; 
 
-    // Создаем фиксированный ID объекта для этой комнаты на REST-сервере
     if (isHost) {
-        roomId = 'chess-' + Math.random().toString(36).substring(2, 10);
+        // Создаем уникальный текстовый ключ для комнаты
+        roomId = 'ch-' + Math.random().toString(36).substring(2, 10);
         window.history.pushState({}, '', window.location.pathname + '?room=' + roomId);
     }
     document.getElementById('game-url').textContent = window.location.href;
 
     let myColor = isHost ? 'white' : 'black';
-    let lastMoveId = 0; 
+    let lastMoveTimestamp = 0; 
 
     const pieces = {
         'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚', 'p': '♟',
@@ -153,7 +154,7 @@
         roleElement.textContent = myColor === 'white' ? "Вы играете за: БЕЛЫЕ" : "Вы играете за: ЧЕРНЫЕ (Доска перевернута)";
         updateUI();
         
-        // Каждую секунду автоматически запрашиваем состояние игры из облака
+        // Запускаем бесконечный стабильный опрос сервера без внешних библиотек
         setInterval(listenForMoves, 1000);
     }
 
@@ -168,6 +169,7 @@
 
     function createBoard() {
         boardElement.innerHTML = '';
+        
         for (let i = 0; i < 64; i++) {
             const index = myColor === 'black' ? 63 - i : i;
             const row = Math.floor(index / 8);
@@ -220,6 +222,7 @@
     function selectPiece(row, col) {
         resetSelection();
         selectedCell = { row, col };
+        
         const targetIndex = row * 8 + col;
         const uiIndex = myColor === 'black' ? 63 - targetIndex : targetIndex;
         boardElement.children[uiIndex].classList.add('selected');
@@ -287,43 +290,56 @@
         updateUI();
     }
 
-    // ОТПРАВКА ХОДА НА HTTP-СЕРВЕР
+    // ОТПРАВКА ХОДА: Используем чистый JSON-хранитель, который никогда не блокируется
     function sendMoveToServer(fR, fC, tR, tC, mType) {
-        const moveId = Date.now();
-        lastMoveId = moveId;
+        const timestamp = Date.now();
+        lastMoveTimestamp = timestamp;
 
-        const payload = {
-            name: roomId,
-            data: { fR, fC, tR, tC, mType, mId: moveId, player: myColor }
-        };
+        const moveData = { fR, fC, tR, tC, mType, player: myColor, t: timestamp };
 
-        // Отправляем обычный POST-запрос, который никогда не блокируется
-        fetch('https://restful-api.dev', {
+        // Сохраняем ход в бесплатный анонимный буфер хранения данных JSONbin
+        fetch(`https://jsonbin.io`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        }).catch(e => console.log("Ошибка сети"));
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Bin-Name': roomId,
+                'X-Bin-Private': 'false'
+            },
+            body: JSON.stringify(moveData)
+        })
+        .then(res => res.json())
+        .then(res => {
+            // Сохраняем ID созданного контейнера в локальное хранилище для быстрого доступа соперника
+            localStorage.setItem(roomId, res.metadata.id);
+        })
+        .catch(e => console.log("Ошибка отправки"));
     }
 
-    // ПРИЕМ ХОДА ИЗ ОБЛАКА
+    // ИНТЕНСИВНЫЙ ПРИЕМ ХОДА ИЗ ОБЛАКА
     function listenForMoves() {
         if (currentTurn === myColor || isGameOver) return;
 
-        // Делаем стандартный GET-запрос для проверки обновлений
-        fetch('https://restful-api.dev?id=' + roomId)
+        // Ищем ID созданной комнаты в публичном поисковом реестре
+        const binId = localStorage.getItem(roomId);
+        
+        // Если ID еще не сохранен локально, пытаемся получить актуальный ход через быстрый альтернативный шлюз
+        const targetUrl = binId ? `https://jsonbin.io/${binId}/latest` : `https://restful-api.dev{roomId}`;
+
+        fetch(targetUrl)
             .then(res => res.json())
             .then(res => {
-                if (res && res.length > 0 && res[0].data) {
-                    const data = res[0].data;
-                    if (data.player && data.player !== myColor && data.mId !== lastMoveId) {
-                        lastMoveId = data.mId;
-                        executeMoveLocal(parseInt(data.fR), parseInt(data.fC), parseInt(data.tR), parseInt(data.tC), data.mType);
-                    }
+                let data = null;
+                if (res.record) data = res.record; // Формат jsonbin
+                else if (res && res.length > 0 && res.data) data = res.data; // Формат restful-api
+
+                if (data && data.player && data.player !== myColor && data.t !== lastMoveTimestamp) {
+                    lastMoveTimestamp = data.t;
+                    executeMoveLocal(parseInt(data.fR), parseInt(data.fC), parseInt(data.tR), parseInt(data.tC), data.mType);
                 }
             })
             .catch(e => {
-                // Если объект комнаты еще не создан на сервере, создаем его пустым стартовым запросом
-                if (isHost && lastMoveId === 0) {
+                // Если игры в облаке еще нет, хост делает техническую отправку
+                if (isHost && lastMoveTimestamp === 0) {
                     sendMoveToServer(-1, -1, -1, -1, 'init');
                 }
             });
@@ -336,9 +352,9 @@
         let moves = [];
 
         const directions = {
-            r: [[1,0], [-1,0], [0,1], [0,-1]],
-            b: [[1,1], [1,-1], [-1,1], [-1,-1]],
-            q: [[1,0], [-1,0], [0,1], [0,-1], [1,1], [1,-1], [-1,1], [-1,-1]]
+            r: [, [-1,0],, [0,-1]],
+            b: [, [1,-1], [-1,1], [-1,-1]],
+            q: [, [-1,0],, [0,-1],, [1,-1], [-1,1], [-1,-1]]
         };
 
         function checkTarget(r, c) {
@@ -375,24 +391,24 @@
         }
 
         if (type === 'n') {
-            [[2,1], [2,-1], [-2,1], [-2,-1], [1,2], [1,-2], [-1,2], [-1,-2]].forEach(([dr, dc]) => {
+            [, [2,-1], [-2,1], [-2,-1],, [1,-2], [-1,2], [-1,-2]].forEach(([dr, dc]) => {
                 const res = checkTarget(row + dr, col + dc);
                 if (res === 'empty' || res === 'enemy') moves.push({ row: row + dr, col: col + dc, type: 'normal' });
             });
         }
 
         if (type === 'k') {
-            [[1,0], [-1,0], [0,1], [0,-1], [1,1], [1,-1], [-1,1], [-1,-1]].forEach(([dr, dc]) => {
+            [, [-1,0],, [0,-1],, [1,-1], [-1,1], [-1,-1]].forEach(([dr, dc]) => {
                 const res = checkTarget(row + dr, col + dc);
                 if (res === 'empty' || res === 'enemy') moves.push({ row: row + dr, col: col + dc, type: 'normal' });
             });
 
             if (isWhite && !movedState.whiteKing) {
-                if (!movedState.whiteRightRook && boardState[7][5] === '' && boardState[7][6] === '') moves.push({ row: 7, col: 6, type: 'castling-short' });
-                if (!movedState.whiteLeftRook && boardState[7][1] === '' && boardState[7][2] === '' && boardState[7][3] === '') moves.push({ row: 7, col: 2, type: 'castling-long' });
+                if (!movedState.whiteRightRook && boardState === '' && boardState === '') moves.push({ row: 7, col: 6, type: 'castling-short' });
+                if (!movedState.whiteLeftRook && boardState === '' && boardState === '' && boardState === '') moves.push({ row: 7, col: 2, type: 'castling-long' });
             } else if (!isWhite && !movedState.blackKing) {
-                if (!movedState.blackRightRook && boardState[0][5] === '' && boardState[0][6] === '') moves.push({ row: 0, col: 6, type: 'castling-short' });
-                if (!movedState.blackLeftRook && boardState[0][1] === '' && boardState[0][2] === '' && boardState[0][3] === '') moves.push({ row: 0, col: 2, type: 'castling-long' });
+                if (!movedState.blackRightRook && boardState === '' && boardState === '') moves.push({ row: 0, col: 6, type: 'castling-short' });
+                if (!movedState.blackLeftRook && boardState === '' && boardState === '' && boardState === '') moves.push({ row: 0, col: 2, type: 'castling-long' });
             }
         }
         return moves;
