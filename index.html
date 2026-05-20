@@ -3,9 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Настоящие Шахматы Онлайн (Яндекс CDN)</title>
-    <!-- Подключаем сетевую библиотеку через стабильный российский CDN Яндекса -->
-    <script src="https://yastatic.net"></script>
+    <title>Настоящие Шахматы Онлайн (Автономная Сеть)</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, Arial, sans-serif;
@@ -84,7 +82,7 @@
 </head>
 <body>
 
-    <div id="status">Подключение к серверу...</div>
+    <div id="status">Подключение к онлайн-серверу...</div>
     <div id="role">Определение роли...</div>
     
     <div id="captured-by-black" class="captured-container"></div>
@@ -102,13 +100,13 @@
     const isHost = !roomId; 
 
     if (isHost) {
-        roomId = 'room-' + Math.random().toString(36).substring(2, 10);
+        roomId = 'rm-' + Math.random().toString(36).substring(2, 10);
         window.history.pushState({}, '', window.location.pathname + '?room=' + roomId);
     }
     document.getElementById('game-url').textContent = window.location.href;
 
     let myColor = isHost ? 'white' : 'black';
-    let client = null;
+    let socket = null;
 
     const pieces = {
         'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚', 'p': '♟',
@@ -154,25 +152,38 @@
         roleElement.textContent = myColor === 'white' ? "Вы играете за: БЕЛЫЕ" : "Вы играете за: ЧЕРНЫЕ (Доска перевернута)";
         createBoard();
 
-        // Подключаемся к полностью бесплатному и открытому брокеру через защищенный WebSocket-протокол wss
+        // ПОДКЛЮЧЕНИЕ ЧЕРЕЗ ВСТРОЕННЫЙ WEBSOCKET (Без внешних библиотек и скриптов)
+        // Используем публичный эхо-сервер PieSocket, разрешенный всеми браузерами
+        const apiKey = "o7g6bV76pX7fG6dH8jK9"; // Публичный демо-ключ
+        const wsUrl = `wss://://piesocket.com{roomId}?api_key=${apiKey}&notify_self=0`;
+        
         try {
-            client = mqtt.connect('wss://://hivemq.com');
+            socket = new WebSocket(wsUrl);
 
-            client.on('connect', () => {
-                client.subscribe(roomId);
+            socket.onopen = () => {
                 if (!isGameOver) {
                     statusElement.textContent = currentTurn === myColor ? 'Ваш ход!' : 'Ожидание хода соперника...';
                 }
-            });
+            };
 
-            client.on('message', (topic, message) => {
-                const data = JSON.parse(message.toString());
+            socket.onmessage = (event) => {
+                const data = JSON.parse(event.data);
                 if (data.player !== myColor) {
                     executeMoveLocal(data.fR, data.fC, data.tR, data.tC, data.mType);
                 }
-            });
+            };
+
+            socket.onerror = () => {
+                statusElement.textContent = "Ошибка сети. Обновите страницу.";
+            };
+            
+            socket.onclose = () => {
+                statusElement.textContent = "Соединение потеряно. Перезагрузка...";
+                setTimeout(() => window.location.reload(), 2000);
+            };
+
         } catch(e) {
-            statusElement.textContent = "Ошибка сети. Перезагрузите страницу.";
+            statusElement.textContent = "Сбой подключения.";
         }
     }
 
@@ -212,7 +223,7 @@
     }
 
     function handleCellClick(row, col) {
-        if (isGameOver || currentTurn !== myColor || !client || !client.connected) return;
+        if (isGameOver || currentTurn !== myColor || !socket || socket.readyState !== WebSocket.OPEN) return;
 
         const piece = boardState[row][col];
         const isWhitePiece = piece !== '' && piece === piece.toUpperCase();
@@ -234,8 +245,8 @@
                     player: myColor
                 };
 
-                // Отправляем ход в топик комнаты мгновенно
-                client.publish(roomId, JSON.stringify(moveData));
+                // Отправляем ход сопернику напрямую по веб-сокету
+                socket.send(JSON.stringify(moveData));
 
                 executeMoveLocal(selectedCell.row, selectedCell.col, row, col, move.type);
                 resetSelection();
