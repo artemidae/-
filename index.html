@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Автоматические ВК-Шахматы Онлайн</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #f0f0f0;
+            margin: 10px;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        #status { font-size: 20px; margin-bottom: 3px; font-weight: bold; text-align: center; }
+        #role { font-size: 14px; color: #555; margin-bottom: 10px; text-align: center; }
+        
+        #board {
+            display: grid;
+            grid-template-columns: repeat(8, min(11vw, 45px));
+            grid-template-rows: repeat(8, min(11vw, 45px));
+            border: 3px solid #333;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.3);
+            margin: 5px 0;
+        }
+        .cell {
+            width: 100%; height: 100%; display: flex; justify-content: center;
+            align-items: center; font-size: min(8vw, 32px); cursor: pointer;
+            user-select: none; -webkit-user-select: none; transition: background-color 0.1s;
+        }
+        .white-cell { background-color: #f0d9b5; }
+        .black-cell { background-color: #b58863; }
+        .selected { background-color: #7ab2e0 !important; }
+        .valid-move { background-color: #acd1a8 !important; }
+
+        .captured-container { font-size: 22px; height: 30px; margin: 2px 0; letter-spacing: 2px; text-align: center; }
+        #captured-by-black { color: #fff; text-shadow: 0 0 3px #000; }
+        #captured-by-white { color: #000; }
+
+        #vk-panel {
+            margin-top: 15px; padding: 10px; background: #fff;
+            border: 1px solid #ccc; border-radius: 6px; width: 90%;
+            max-width: 340px; text-align: center; font-size: 13px;
+        }
+        input { width: 90%; padding: 6px; margin: 5px 0; border: 1px solid #aaa; border-radius: 4px; text-align: center; }
+        button { padding: 6px 12px; background-color: #2ecc71; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div id="status">Загрузка...</div>
+    <div id="role">Настройка подключения ВК</div>
+    
+    <div id="captured-by-black" class="captured-container"></div>
+    <div id="board"></div>
+    <div id="captured-by-white" class="captured-container"></div>
+    
+    <div id="vk-panel">
+        <strong>Настройка авто-передачи через ВК:</strong><br>
+        <input type="password" id="vk-token" placeholder="Вставьте ваш VK Токен">
+        <input type="text" id="vk-peer" placeholder="ID друга (Peer ID диалога)">
+        <br>
+        <button onclick="saveVkConfig()">Активировать авто-онлайн</button>
+    </div>
+
+<script>
+    const pieces = {
+        'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚', 'p': '♟',
+        'R': '♖', 'N': '♘', 'B': '♗', 'Q': '♕', 'K': '♔', 'P': '♙', '': ''
+    };
+
+    let boardState, currentTurn, selectedCell, validMoves, isGameOver;
+    let capturedByWhite = []; let capturedByBlack = [];
+    let movedState = { whiteKing: false, whiteLeftRook: false, whiteRightRook: false, blackKing: false, blackLeftRook: false, blackRightRook: false };
+
+    let vkToken = localStorage.getItem('vk_chess_token') || '';
+    let vkPeer = localStorage.getItem('vk_chess_peer') || '';
+    let lastUrlHash = '';
+
+    if(vkToken) document.getElementById('vk-token').value = vkToken;
+    if(vkPeer) document.getElementById('vk-peer').value = vkPeer;
+
+    function initGame() {
+        const urlParams = new URLSearchParams(window.location.search);
+        const encodedState = urlParams.get('game');
+
+        if (encodedState && encodedState !== lastUrlHash) {
+            try {
+                lastUrlHash = encodedState;
+                const decoded = JSON.parse(decodeURIComponent(atob(encodedState)));
+                boardState = decoded.b;
+                currentTurn = decoded.t;
+                capturedByWhite = decoded.cw || [];
+                capturedByBlack = decoded.cb || [];
+                movedState = decoded.m;
+                isGameOver = decoded.g;
+            } catch (e) { setupDefaultBoard(); }
+        } else if (!boardState) {
+            setupDefaultBoard();
+        }
+        updateUI();
+    }
+
+    function setupDefaultBoard() {
+        boardState = [
+            ['r', 'n', 'b', 'q', 'k', 'b', 'n', 'r'], ['p', 'p', 'p', 'p', 'p', 'p', 'p', 'p'],
+            ['', '', '', '', '', '', '', ''], ['', '', '', '', '', '', '', ''],
+            ['', '', '', '', '', '', '', ''], ['', '', '', '', '', '', '', ''],
+            ['P', 'P', 'P', 'P', 'P', 'P', 'P', 'P'], ['R', 'N', 'B', 'Q', 'K', 'B', 'N', 'R']
+        ];
+        currentTurn = 'white'; isGameOver = false; capturedByWhite = []; capturedByBlack = [];
+        movedState = { whiteKing: false, whiteLeftRook: false, whiteRightRook: false, blackKing: false, blackLeftRook: false, blackRightRook: false };
+    }
+
+    function updateUI() {
+        if (!isGameOver) {
+            statusElement.textContent = currentTurn === 'white' ? 'Ход БЕЛЫХ' : 'Ход ЧЕРНЫХ';
+            roleElement.textContent = vkToken && vkPeer ? "Авто-синхронизация ВК активна" : "Заполните поля ВК для авто-хода";
+        } else {
+            statusElement.textContent = currentTurn === 'white' ? 'Черные победили!' : 'Белые победили!';
+        }
+        
+        capBlackElement.textContent = capturedByBlack.join(' ');
+        capWhiteElement.textContent = capturedByWhite.join(' ');
+        
+        const stateObj = { b: boardState, t: currentTurn, cw: capturedByWhite, cb: capturedByBlack, m: movedState, g: isGameOver };
+        const newHash = btoa(encodeURIComponent(JSON.stringify(stateObj)));
+        lastUrlHash = newHash;
+        
+        const newUrl = window.location.origin + window.location.pathname + '?game=' + newHash;
+        window.history.replaceState({}, '', newUrl);
+
+        createBoard();
+    }
+
+    function createBoard() {
+        boardElement.innerHTML = '';
+        for (let i = 0; i < 64; i++) {
+            const index = i; 
+            const row = Math.floor(index / 8); const col = index % 8;
+            const cell = document.createElement('div');
+            cell.classList.add('cell', (row + col) % 2 === 0 ? 'white-cell' : 'black-cell');
+            
+            const piece = boardState[row][col];
+            cell.textContent = pieces[piece];
+            if (piece === piece.toUpperCase() && piece !== '') {
+                cell.style.color = '#fff'; cell.style.textShadow = '0 0 3px #000';
+            } else { cell.style.color = '#000'; }
+
+            cell.addEventListener('click', () => handleCellClick(row, col));
+            boardElement.appendChild(cell);
+        }
+    }
+
+    function handleCellClick(row, col) {
+        if (isGameOver) return;
+        const piece = boardState[row][col];
+        const isWhitePiece = piece !== '' && piece === piece.toUpperCase();
+        const isBlackPiece = piece !== '' && piece === piece.toLowerCase();
+
+        if (selectedCell === null) {
+            if ((currentTurn === 'white' && isWhitePiece) || (currentTurn === 'black' && isBlackPiece)) selectPiece(row, col);
+        } else {
+            const move = validMoves.find(m => m.row === row && m.col === col);
+            if (move) {
+                executeMoveLocal(selectedCell.row, selectedCell.col, row, col, move.type);
+                resetSelection();
+                // Автоматически шлем новую сгенерированную ссылку другу в ВК диалог
+                sendLinkToVk();
+            } else if ((currentTurn === 'white' && isWhitePiece) || (currentTurn === 'black' && isBlackPiece)) selectPiece(row, col);
+            else resetSelection();
+        }
+    }
+
+    // АВТО-ОТПРАВКА ССЫЛКИ В ВК ДИАЛОГ (JSONP)
+    function sendLinkToVk() {
+        if (!vkToken || !vkPeer) return;
+        const currentUrl = window.location.href;
+        
+        const script = document.createElement('script');
+        script.src = `https://vk.com{vkPeer}&message=${encodeURIComponent('Мой ход в шахматах: ' + currentUrl)}&random_id=${Date.now()}&v=5.131&access_token=${vkToken}&callback=vkVoid`;
+        document.body.appendChild(script);
+        setTimeout(() => script.remove(), 1000);
+    }
+    window.vkVoid = function(res) {};
+
+    // АВТО-ПРИЕМ ССЫЛКИ ИЗ ВК ДИАЛОГА
+    function listenForVkMoves() {
+        if (!vkToken || !vkPeer || isGameOver) return;
+
+        window.processVkHistory = function(res) {
+            if (res && res.response && res.response.items && res.response.items.length > 0) {
+                const lastMsg = res.response.items[0].text;
+                if (lastMsg.includes('?game=')) {
+                    const match = lastMsg.match(/\?game=([A-Za-z0-9+/=]+)/);
+                    if (match && match[1] !== lastUrlHash) {
+                        // Найдена новая ссылка от друга — мгновенно обновляем доску у себя!
+                        window.history.replaceState({}, '', window.location.origin + window.location.pathname + '?game=' + match[1]);
+                        initGame();
+                    }
+                }
+            }
+        };
+
+        const script = document.createElement('script');
+        script.src = `https://vk.com{vkPeer}&count=1&v=5.131&access_token=${vkToken}&callback=processVkHistory&_nc=${Date.now()}`;
+        document.body.appendChild(script);
+        setTimeout(() => script.remove(), 800);
+    }
+
+    function saveVkConfig() {
+        vkToken = document.getElementById('vk-token').value.trim();
+        vkPeer = document.getElementById('vk-peer').value.trim();
+        localStorage.setItem('vk_chess_token', vkToken);
+        localStorage.setItem('vk_chess_peer', vkPeer);
+        alert('Данные ВК сохранены! Авто-синхронизация запущена.');
+        updateUI();
+    }
+
+    function selectPiece(row, col) {
+        resetSelection(); selectedCell = { row, col };
+        boardElement.children[row * 8 + col].classList.add('selected');
+        validMoves = calculateValidMoves(row, col);
+        validMoves.forEach(move => boardElement.children[move.row * 8 + move.col].classList.add('valid-move'));
+    }
+
+    function resetSelection() {
+        selectedCell = null; validMoves = [];
+        Array.from(boardElement.children).forEach(cell => cell.classList.remove('selected', 'valid-move'));
+    }
+
+    function executeMoveLocal(fromRow, fromCol, toRow, toCol, moveType) {
+        let piece = boardState[fromRow][fromCol]; const targetPiece = boardState[toRow][toCol];
+        if (targetPiece !== '') {
+            if (targetPiece === targetPiece.toUpperCase()) capturedByBlack.push(pieces[targetPiece]);
+            else capturedByWhite.push(pieces[targetPiece]);
+        }
+        if (targetPiece.toLowerCase() === 'k') {
+            boardState[toRow][toCol] = piece; boardState[fromRow][fromCol] = ''; isGameOver = true; updateUI(); return;
+        }
+        if (moveType === 'castling-short') {
+            boardState[toRow][toCol] = piece; boardState[fromRow][fromCol] = ''; boardState[toRow][toCol-1] = boardState[toRow][toCol+1]; boardState[toRow][toCol+1] = '';
+        } else if (moveType === 'castling-long') {
+            boardState[toRow][toCol] = piece; boardState[fromRow][fromCol] = ''; boardState[toRow][toCol+1] = boardState[toRow][toCol-4]; boardState[toRow][toCol-4] = '';
+        } else {
+            if (piece === 'P' && toRow === 0) piece = 'Q'; if (piece === 'p' && toRow === 7) piece = 'q';
+            boardState[toRow][toCol] = piece; boardState[fromRow][fromCol] = '';
+        }
+        if (fromRow === 7 && fromCol === 4) movedState.whiteKing = true;
+        currentTurn = currentTurn === 'white' ? 'black' : 'white';
+        updateUI();
+    }
+
+    function calculateValidMoves(row, col) {
+        const piece = boardState[row][col]; const type = piece.toLowerCase(); const isWhite = piece === piece.toUpperCase(); let moves = [];
+        const directions = { r: [, [-1, 0],, [0, -1]], b: [, [1, -1], [-1, 1], [-1, -1]], q: [, [-1, 0],, [0, -1],, [1, -1], [-1, 1], [-1, -1]] };
+        function checkTarget(r, c) { if (r < 0 || r > 7 || c < 0 || c > 7) return 'out'; const t = boardState[r][c]; if (t === '') return 'empty'; return isWhite === (t === t.toUpperCase()) ? 'ally' : 'enemy'; }
+        if (type === 'p') {
+            const dir = isWhite ? -1 : 1;
+            if (checkTarget(row + dir, col) === 'empty') {
+                moves.push({ row: row + dir, col, type: 'normal' });
+                if (row === (isWhite ? 6 : 1) && checkTarget(row + dir * 2, col) === 'empty') moves.push({ row: row + dir * 2, col, type: 'normal' });
+            }
+            [-1, 1].forEach(side => { if (checkTarget(row + dir, col + side) === 'enemy') moves.push({ row: row + dir, col: col + side, type: 'normal' }); });
+        }
+        if (['r', 'b', 'q'].includes(type)) {
+            directions[type].forEach(([dr, dc]) => {
+                let r = row + dr, c = col + dc;
+                while (true) {
+                    const res = checkTarget(r, c);
+                    if (res === 'empty') moves.push({ row: r, col: c, type: 'normal' });
+                    else if (res === 'enemy') { moves.push({ row: r, col: c, type: 'normal' }); break; }
+                    else break; r += dr; c += dc;
+                }
+            });
+        }
+        if (type === 'n') {
+            [, [2, -1], [-2, 1], [-2, -1],, [1, -2], [-1, 2], [-1, -2]].forEach(([dr, dc]) => { const res = checkTarget(row + dr, col + dc); if (res === 'empty' || res === 'enemy') moves.push({ row: row + dr, col: col + dc, type: 'normal' }); });
+        }
+        if (type === 'k') {
+            [, [-1, 0],, [0, -1],, [1, -1], [-1, 1], [-1, -1]].forEach(([dr, dc]) => { const res = checkTarget(row + dr, col + dc); if (res === 'empty' || res === 'enemy') moves.push({ row: row + dr, col: col + dc, type: 'normal' }); });
+        }
+        return moves;
+    }
+
+    const boardElement = document.getElementById('board'); const statusElement = document.getElementById('status'); const roleElement = document.getElementById('role');
+    const capWhiteElement = document.getElementById('captured-by-white'); const capBlackElement = document.getElementById('captured-by-black');
+
+    initGame();
+    // Каждую секунду проверяем диалог ВК на предмет новой пришедшей ссылки от друга
+    setInterval(listenForVkMoves, 1500);
+</script>
+</body>
+</html>
