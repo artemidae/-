@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Настоящие Шахматы Онлайн (Stable Loop)</title>
+    <title>Шахматы Онлайн (Stable No-Cache)</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, Arial, sans-serif;
@@ -82,7 +82,7 @@
 </head>
 <body>
 
-    <div id="status">Синхронизация онлайн-комнаты...</div>
+    <div id="status">Загрузка игры...</div>
     <div id="role">Определение цвета...</div>
     
     <div id="captured-by-black" class="captured-container"></div>
@@ -100,14 +100,13 @@
     const isHost = !roomId; 
 
     if (isHost) {
-        // Генерируем уникальный текстовый ID комнаты
-        roomId = 'room-' + Math.random().toString(36).substring(2, 10);
+        roomId = 'id' + Math.random().toString(36).substring(2, 10);
         window.history.pushState({}, '', window.location.pathname + '?room=' + roomId);
     }
     document.getElementById('game-url').textContent = window.location.href;
 
     let myColor = isHost ? 'white' : 'black';
-    let lastMoveId = 0; 
+    let lastMoveTimestamp = 0;
 
     const pieces = {
         'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚', 'p': '♟',
@@ -153,7 +152,6 @@
         roleElement.textContent = myColor === 'white' ? "Вы играете за: БЕЛЫЕ" : "Вы играете за: ЧЕРНЫЕ (Доска перевернута)";
         updateUI();
         
-        // Запускаем автоматическую проверку ходов каждую секунду
         setInterval(listenForMoves, 1000);
     }
 
@@ -287,44 +285,46 @@
         updateUI();
     }
 
-    // ОТПРАВКА: Записываем ход в общедоступную переменную через анонимное хранилище
+    // Автономная отправка на независимый KeyValue REST-буфер без ограничений CORS
     function sendMoveToServer(fR, fC, tR, tC, mType) {
-        const moveId = Date.now();
-        lastMoveId = moveId;
+        const timestamp = Date.now();
+        lastMoveTimestamp = timestamp;
+        const moveData = `${fR}_${fC}_${tR}_${tC}_${mType}_${myColor}_${timestamp}`;
 
-        const url = `https://countapi.xyz{roomId}/move?value=${fR}x${fC}x${tR}x${tC}x${mType}x${myColor}x${moveId}`;
-        
-        // Фоновый запрос без блокировок CORS
-        const img = new Image();
-        img.src = url;
+        fetch(`https://keyvalue.xyz{roomId}`).then(res => res.text()).then(keyUrl => {
+            const cleanKey = keyUrl.split('/').pop().trim();
+            localStorage.setItem(roomId, cleanKey);
+            fetch(`https://keyvalue.xyz{cleanKey}/move`, { method: 'POST', body: moveData });
+        }).catch(e => {
+            const savedKey = localStorage.getItem(roomId);
+            if (savedKey) fetch(`https://keyvalue.xyz{savedKey}/move`, { method: 'POST', body: moveData });
+        });
     }
 
-    // ПРИЕМ: Считываем данные из облака
+    // Прием хода из независимого буфера
     function listenForMoves() {
         if (currentTurn === myColor || isGameOver) return;
+        const savedKey = localStorage.getItem(roomId);
+        if (!savedKey) {
+            if (isHost && lastMoveTimestamp === 0) sendMoveToServer(-1, -1, -1, -1, 'init');
+            return;
+        }
 
-        fetch(`https://countapi.xyz{roomId}/move?_ncache=${Date.now()}`)
-            .then(res => res.json())
-            .then(res => {
-                if (res && res.value) {
-                    const parts = res.value.split('x');
+        fetch(`https://keyvalue.xyz{savedKey}/move?_nc=${Date.now()}`)
+            .then(res => res.text())
+            .then(text => {
+                if (text && text.includes('_')) {
+                    const parts = text.split('_');
                     if (parts.length === 7) {
                         const senderColor = parts[5];
-                        const mId = parseInt(parts[6]);
-
-                        if (senderColor !== myColor && mId !== lastMoveId) {
-                            lastMoveId = mId;
+                        const t = parseInt(parts[6]);
+                        if (senderColor !== myColor && t !== lastMoveTimestamp) {
+                            lastMoveTimestamp = t;
                             executeMoveLocal(parseInt(parts[0]), parseInt(parts[1]), parseInt(parts[2]), parseInt(parts[3]), parts[4]);
                         }
                     }
                 }
-            })
-            .catch(e => {
-                // Если комната еще не создана на сервере, хост инициализирует её
-                if (isHost && lastMoveId === 0) {
-                    sendMoveToServer(-1, -1, -1, -1, 'init');
-                }
-            });
+            }).catch(e => {});
     }
 
     function calculateValidMoves(row, col) {
@@ -334,9 +334,9 @@
         let moves = [];
 
         const directions = {
-            r: [, [-1,0],, [0,-1]],
-            b: [, [1,-1], [-1,1], [-1,-1]],
-            q: [, [-1,0],, [0,-1],, [1,-1], [-1,1], [-1,-1]]
+            r: [[1,0], [-1,0], [0,1], [0,-1]],
+            b: [[1,1], [1,-1], [-1,1], [-1,-1]],
+            q: [[1,0], [-1,0], [0,1], [0,-1], [1,1], [1,-1], [-1,1], [-1,-1]]
         };
 
         function checkTarget(r, c) {
@@ -373,24 +373,24 @@
         }
 
         if (type === 'n') {
-            [, [2,-1], [-2,1], [-2,-1],, [1,-2], [-1,2], [-1,-2]].forEach(([dr, dc]) => {
+            [[2,1], [2,-1], [-2,1], [-2,-1], [1,2], [1,-2], [-1,2], [-1,-2]].forEach(([dr, dc]) => {
                 const res = checkTarget(row + dr, col + dc);
                 if (res === 'empty' || res === 'enemy') moves.push({ row: row + dr, col: col + dc, type: 'normal' });
             });
         }
 
         if (type === 'k') {
-            [, [-1,0],, [0,-1],, [1,-1], [-1,1], [-1,-1]].forEach(([dr, dc]) => {
+            [[1,0], [-1,0], [0,1], [0,-1], [1,1], [1,-1], [-1,1], [-1,-1]].forEach(([dr, dc]) => {
                 const res = checkTarget(row + dr, col + dc);
                 if (res === 'empty' || res === 'enemy') moves.push({ row: row + dr, col: col + dc, type: 'normal' });
             });
 
             if (isWhite && !movedState.whiteKing) {
-                if (!movedState.whiteRightRook && boardState === '' && boardState === '') moves.push({ row: 7, col: 6, type: 'castling-short' });
-                if (!movedState.whiteLeftRook && boardState === '' && boardState === '' && boardState === '') moves.push({ row: 7, col: 2, type: 'castling-long' });
+                if (!movedState.whiteRightRook && boardState[7][5] === '' && boardState[7][6] === '') moves.push({ row: 7, col: 6, type: 'castling-short' });
+                if (!movedState.whiteLeftRook && boardState[7][1] === '' && boardState[7][2] === '' && boardState[7][3] === '') moves.push({ row: 7, col: 2, type: 'castling-long' });
             } else if (!isWhite && !movedState.blackKing) {
-                if (!movedState.blackRightRook && boardState === '' && boardState === '') moves.push({ row: 0, col: 6, type: 'castling-short' });
-                if (!movedState.blackLeftRook && boardState === '' && boardState === '' && boardState === '') moves.push({ row: 0, col: 2, type: 'castling-long' });
+                if (!movedState.blackRightRook && boardState[0][5] === '' && boardState[0][6] === '') moves.push({ row: 0, col: 6, type: 'castling-short' });
+                if (!movedState.blackLeftRook && boardState[0][1] === '' && boardState[0][2] === '' && boardState[0][3] === '') moves.push({ row: 0, col: 2, type: 'castling-long' });
             }
         }
         return moves;
