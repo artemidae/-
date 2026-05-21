@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Настоящие Шахматы Онлайн (Безопасная Сеть)</title>
+    <title>Настоящие Шахматы Онлайн (Stable Loop)</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, Arial, sans-serif;
@@ -82,8 +82,8 @@
 </head>
 <body>
 
-    <div id="status">Синхронизация доски...</div>
-    <div id="role">Определение вашей роли...</div>
+    <div id="status">Синхронизация онлайн-комнаты...</div>
+    <div id="role">Определение цвета...</div>
     
     <div id="captured-by-black" class="captured-container"></div>
     <div id="board"></div>
@@ -100,19 +100,14 @@
     const isHost = !roomId; 
 
     if (isHost) {
-        // Генерируем короткий ID комнаты из 6 символов, чтобы он без проблем передавался в строке запроса
-        roomId = 'id' + Math.random().toString(36).substring(2, 8);
+        // Генерируем уникальный текстовый ID комнаты
+        roomId = 'room-' + Math.random().toString(36).substring(2, 10);
         window.history.pushState({}, '', window.location.pathname + '?room=' + roomId);
     }
     document.getElementById('game-url').textContent = window.location.href;
 
     let myColor = isHost ? 'white' : 'black';
-    let lastMoveTimestamp = 0; 
-
-    // Выделенный безопасный бот-транслятор (VK API) [4, 5]
-    const API_URL = "https://vk.com";
-    const ACCESS_TOKEN = "vk1.a.8L9V5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z5y5Z";
-    const PEER_ID = "2000000123"; // Зашифрованный внутренний ID беседы-буфера
+    let lastMoveId = 0; 
 
     const pieces = {
         'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚', 'p': '♟',
@@ -158,7 +153,7 @@
         roleElement.textContent = myColor === 'white' ? "Вы играете за: БЕЛЫЕ" : "Вы играете за: ЧЕРНЫЕ (Доска перевернута)";
         updateUI();
         
-        // Опрашиваем стабильный шлюз раз в секунду с помощью JSONP обхода CORS
+        // Запускаем автоматическую проверку ходов каждую секунду
         setInterval(listenForMoves, 1000);
     }
 
@@ -292,45 +287,44 @@
         updateUI();
     }
 
-    // МГНОВЕННАЯ ОТПРАВКА ХОДА: Используем JSONP инъекцию скрипта, обходящую любые CORS-запреты
+    // ОТПРАВКА: Записываем ход в общедоступную переменную через анонимное хранилище
     function sendMoveToServer(fR, fC, tR, tC, mType) {
-        const timestamp = Date.now();
-        lastMoveTimestamp = timestamp;
+        const moveId = Date.now();
+        lastMoveId = moveId;
 
-        const textMessage = `${roomId}_${fR}_${fC}_${tR}_${tC}_${mType}_${myColor}_${timestamp}`;
+        const url = `https://countapi.xyz{roomId}/move?value=${fR}x${fC}x${tR}x${tC}x${mType}x${myColor}x${moveId}`;
         
-        // Создаем динамический тег script (классический неуязвимый хак для обхода ограничений CORS)
-        const script = document.createElement('script');
-        script.src = `https://vk.com{PEER_ID}&message=${encodeURIComponent(textMessage)}&random_id=${timestamp}&v=5.131&access_token=${ACCESS_TOKEN}&callback=void`;
-        document.body.appendChild(script);
-        setTimeout(() => script.remove(), 1000);
+        // Фоновый запрос без блокировок CORS
+        const img = new Image();
+        img.src = url;
     }
 
-    // СТАБИЛЬНЫЙ ПРИЕМ ХОДА СОПЕРНИКА
+    // ПРИЕМ: Считываем данные из облака
     function listenForMoves() {
         if (currentTurn === myColor || isGameOver) return;
 
-        window.processVKData = function(res) {
-            if (res && res.response && res.response.items && res.response.items.length > 0) {
-                const text = res.response.items[0].text;
-                const parts = text.split('_');
-                
-                if (parts.length === 8 && parts[0] === roomId) {
-                    const senderColor = parts[6];
-                    const t = parseInt(parts[7]);
+        fetch(`https://countapi.xyz{roomId}/move?_ncache=${Date.now()}`)
+            .then(res => res.json())
+            .then(res => {
+                if (res && res.value) {
+                    const parts = res.value.split('x');
+                    if (parts.length === 7) {
+                        const senderColor = parts[5];
+                        const mId = parseInt(parts[6]);
 
-                    if (senderColor !== myColor && t !== lastMoveTimestamp) {
-                        lastMoveTimestamp = t;
-                        executeMoveLocal(parseInt(parts[1]), parseInt(parts[2]), parseInt(parts[3]), parseInt(parts[4]), parts[5]);
+                        if (senderColor !== myColor && mId !== lastMoveId) {
+                            lastMoveId = mId;
+                            executeMoveLocal(parseInt(parts[0]), parseInt(parts[1]), parseInt(parts[2]), parseInt(parts[3]), parts[4]);
+                        }
                     }
                 }
-            }
-        };
-
-        const script = document.createElement('script');
-        script.src = `${API_URL}?peer_id=${PEER_ID}&count=1&v=5.131&access_token=${ACCESS_TOKEN}&callback=processVKData&_nocache=${Date.now()}`;
-        document.body.appendChild(script);
-        setTimeout(() => script.remove(), 800);
+            })
+            .catch(e => {
+                // Если комната еще не создана на сервере, хост инициализирует её
+                if (isHost && lastMoveId === 0) {
+                    sendMoveToServer(-1, -1, -1, -1, 'init');
+                }
+            });
     }
 
     function calculateValidMoves(row, col) {
@@ -340,9 +334,9 @@
         let moves = [];
 
         const directions = {
-            r: [[1,0], [-1,0], [0,1], [0,-1]],
-            b: [[1,1], [1,-1], [-1,1], [-1,-1]],
-            q: [[1,0], [-1,0], [0,1], [0,-1], [1,1], [1,-1], [-1,1], [-1,-1]]
+            r: [, [-1,0],, [0,-1]],
+            b: [, [1,-1], [-1,1], [-1,-1]],
+            q: [, [-1,0],, [0,-1],, [1,-1], [-1,1], [-1,-1]]
         };
 
         function checkTarget(r, c) {
@@ -379,24 +373,24 @@
         }
 
         if (type === 'n') {
-            [[2,1], [2,-1], [-2,1], [-2,-1], [1,2], [1,-2], [-1,2], [-1,-2]].forEach(([dr, dc]) => {
+            [, [2,-1], [-2,1], [-2,-1],, [1,-2], [-1,2], [-1,-2]].forEach(([dr, dc]) => {
                 const res = checkTarget(row + dr, col + dc);
                 if (res === 'empty' || res === 'enemy') moves.push({ row: row + dr, col: col + dc, type: 'normal' });
             });
         }
 
         if (type === 'k') {
-            [[1,0], [-1,0], [0,1], [0,-1], [1,1], [1,-1], [-1,1], [-1,-1]].forEach(([dr, dc]) => {
+            [, [-1,0],, [0,-1],, [1,-1], [-1,1], [-1,-1]].forEach(([dr, dc]) => {
                 const res = checkTarget(row + dr, col + dc);
                 if (res === 'empty' || res === 'enemy') moves.push({ row: row + dr, col: col + dc, type: 'normal' });
             });
 
             if (isWhite && !movedState.whiteKing) {
-                if (!movedState.whiteRightRook && boardState[7][5] === '' && boardState[7][6] === '') moves.push({ row: 7, col: 6, type: 'castling-short' });
-                if (!movedState.whiteLeftRook && boardState[7][1] === '' && boardState[7][2] === '' && boardState[7][3] === '') moves.push({ row: 7, col: 2, type: 'castling-long' });
+                if (!movedState.whiteRightRook && boardState === '' && boardState === '') moves.push({ row: 7, col: 6, type: 'castling-short' });
+                if (!movedState.whiteLeftRook && boardState === '' && boardState === '' && boardState === '') moves.push({ row: 7, col: 2, type: 'castling-long' });
             } else if (!isWhite && !movedState.blackKing) {
-                if (!movedState.blackRightRook && boardState[0][5] === '' && boardState[0][6] === '') moves.push({ row: 0, col: 6, type: 'castling-short' });
-                if (!movedState.blackLeftRook && boardState[0][1] === '' && boardState[0][2] === '' && boardState[0][3] === '') moves.push({ row: 0, col: 2, type: 'castling-long' });
+                if (!movedState.blackRightRook && boardState === '' && boardState === '') moves.push({ row: 0, col: 6, type: 'castling-short' });
+                if (!movedState.blackLeftRook && boardState === '' && boardState === '' && boardState === '') moves.push({ row: 0, col: 2, type: 'castling-long' });
             }
         }
         return moves;
