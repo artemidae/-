@@ -80,6 +80,12 @@
     let vkPeer = localStorage.getItem('vk_chess_peer') || '';
     let lastUrlHash = '';
 
+    const boardElement = document.getElementById('board'); 
+    const statusElement = document.getElementById('status'); 
+    const roleElement = document.getElementById('role');
+    const capWhiteElement = document.getElementById('captured-by-white'); 
+    const capBlackElement = document.getElementById('captured-by-black');
+
     if(vkToken) document.getElementById('vk-token').value = vkToken;
     if(vkPeer) document.getElementById('vk-peer').value = vkPeer;
 
@@ -106,10 +112,14 @@
 
     function setupDefaultBoard() {
         boardState = [
-            ['r', 'n', 'b', 'q', 'k', 'b', 'n', 'r'], ['p', 'p', 'p', 'p', 'p', 'p', 'p', 'p'],
-            ['', '', '', '', '', '', '', ''], ['', '', '', '', '', '', '', ''],
-            ['', '', '', '', '', '', '', ''], ['', '', '', '', '', '', '', ''],
-            ['P', 'P', 'P', 'P', 'P', 'P', 'P', 'P'], ['R', 'N', 'B', 'Q', 'K', 'B', 'N', 'R']
+            ['r', 'n', 'b', 'q', 'k', 'b', 'n', 'r'], 
+            ['p', 'p', 'p', 'p', 'p', 'p', 'p', 'p'],
+            ['', '', '', '', '', '', '', ''], 
+            ['', '', '', '', '', '', '', ''],
+            ['', '', '', '', '', '', '', ''], 
+            ['', '', '', '', '', '', '', ''],
+            ['P', 'P', 'P', 'P', 'P', 'P', 'P', 'P'], 
+            ['R', 'N', 'B', 'Q', 'K', 'B', 'N', 'R']
         ];
         currentTurn = 'white'; isGameOver = false; capturedByWhite = []; capturedByBlack = [];
         movedState = { whiteKing: false, whiteLeftRook: false, whiteRightRook: false, blackKing: false, blackLeftRook: false, blackRightRook: false };
@@ -168,36 +178,34 @@
             if (move) {
                 executeMoveLocal(selectedCell.row, selectedCell.col, row, col, move.type);
                 resetSelection();
-                // Автоматически шлем новую сгенерированную ссылку другу в ВК диалог
                 sendLinkToVk();
             } else if ((currentTurn === 'white' && isWhitePiece) || (currentTurn === 'black' && isBlackPiece)) selectPiece(row, col);
             else resetSelection();
         }
     }
 
-    // АВТО-ОТПРАВКА ССЫЛКИ В ВК ДИАЛОГ (JSONP)
+    // ИСПРАВЛЕННАЯ АВТО-ОТПРАВКА В ВК (Использование корректных переменных)
     function sendLinkToVk() {
         if (!vkToken || !vkPeer) return;
         const currentUrl = window.location.href;
         
         const script = document.createElement('script');
-        script.src = `https://vk.com{vkPeer}&message=${encodeURIComponent('Мой ход в шахматах: ' + currentUrl)}&random_id=${Date.now()}&v=5.131&access_token=${vkToken}&callback=vkVoid`;
+        script.src = `https://vk.com{vkPeer}&message=${encodeURIComponent('Ход сделан! Ссылка: ' + currentUrl)}&random_id=${Date.now()}&v=5.131&access_token=${vkToken}&callback=vkVoid`;
         document.body.appendChild(script);
         setTimeout(() => script.remove(), 1000);
     }
     window.vkVoid = function(res) {};
 
-    // АВТО-ПРИЕМ ССЫЛКИ ИЗ ВК ДИАЛОГА
+    // ИСПРАВЛЕННЫЙ АВТО-ПРИЕМ ИЗ ВК
     function listenForVkMoves() {
         if (!vkToken || !vkPeer || isGameOver) return;
 
         window.processVkHistory = function(res) {
             if (res && res.response && res.response.items && res.response.items.length > 0) {
                 const lastMsg = res.response.items[0].text;
-                if (lastMsg.includes('?game=')) {
+                if (lastMsg && lastMsg.includes('?game=')) {
                     const match = lastMsg.match(/\?game=([A-Za-z0-9+/=]+)/);
                     if (match && match[1] !== lastUrlHash) {
-                        // Найдена новая ссылка от друга — мгновенно обновляем доску у себя!
                         window.history.replaceState({}, '', window.location.origin + window.location.pathname + '?game=' + match[1]);
                         initGame();
                     }
@@ -254,10 +262,23 @@
         updateUI();
     }
 
+    // ПОЛНОСТЬЮ ИСПРАВЛЕННЫЙ ИГРОВОЙ ДВИЖОК ДВИЖЕНИЯ ФИГУР
     function calculateValidMoves(row, col) {
         const piece = boardState[row][col]; const type = piece.toLowerCase(); const isWhite = piece === piece.toUpperCase(); let moves = [];
-        const directions = { r: [, [-1, 0],, [0, -1]], b: [, [1, -1], [-1, 1], [-1, -1]], q: [, [-1, 0],, [0, -1],, [1, -1], [-1, 1], [-1, -1]] };
-        function checkTarget(r, c) { if (r < 0 || r > 7 || c < 0 || c > 7) return 'out'; const t = boardState[r][c]; if (t === '') return 'empty'; return isWhite === (t === t.toUpperCase()) ? 'ally' : 'enemy'; }
+        
+        const directions = { 
+            r: [[-1, 0], [1, 0], [0, -1], [0, 1]], 
+            b: [[1, -1], [-1, 1], [-1, -1], [1, 1]], 
+            q: [[-1, 0], [1, 0], [0, -1], [0, 1], [1, -1], [-1, 1], [-1, -1], [1, 1]] 
+        };
+
+        function checkTarget(r, c) { 
+            if (r < 0 || r > 7 || c < 0 || c > 7) return 'out'; 
+            const t = boardState[r][c]; 
+            if (t === '') return 'empty'; 
+            return isWhite === (t === t.toUpperCase()) ? 'ally' : 'enemy'; 
+        }
+
         if (type === 'p') {
             const dir = isWhite ? -1 : 1;
             if (checkTarget(row + dir, col) === 'empty') {
@@ -273,24 +294,27 @@
                     const res = checkTarget(r, c);
                     if (res === 'empty') moves.push({ row: r, col: c, type: 'normal' });
                     else if (res === 'enemy') { moves.push({ row: r, col: c, type: 'normal' }); break; }
-                    else break; r += dr; c += dc;
+                    else break; 
+                    r += dr; c += dc;
                 }
             });
         }
         if (type === 'n') {
-            [, [2, -1], [-2, 1], [-2, -1],, [1, -2], [-1, 2], [-1, -2]].forEach(([dr, dc]) => { const res = checkTarget(row + dr, col + dc); if (res === 'empty' || res === 'enemy') moves.push({ row: row + dr, col: col + dc, type: 'normal' }); });
+            [[2, -1], [2, 1], [-2, 1], [-2, -1], [1, -2], [1, 2], [-1, 2], [-1, -2]].forEach(([dr, dc]) => { 
+                const res = checkTarget(row + dr, col + dc); 
+                if (res === 'empty' || res === 'enemy') moves.push({ row: row + dr, col: col + dc, type: 'normal' }); 
+            });
         }
         if (type === 'k') {
-            [, [-1, 0],, [0, -1],, [1, -1], [-1, 1], [-1, -1]].forEach(([dr, dc]) => { const res = checkTarget(row + dr, col + dc); if (res === 'empty' || res === 'enemy') moves.push({ row: row + dr, col: col + dc, type: 'normal' }); });
+            [[-1, 0], [1, 0], [0, -1], [0, 1], [1, -1], [-1, 1], [-1, -1], [1, 1]].forEach(([dr, dc]) => { 
+                const res = checkTarget(row + dr, col + dc); 
+                if (res === 'empty' || res === 'enemy') moves.push({ row: row + dr, col: col + dc, type: 'normal' }); 
+            });
         }
         return moves;
     }
 
-    const boardElement = document.getElementById('board'); const statusElement = document.getElementById('status'); const roleElement = document.getElementById('role');
-    const capWhiteElement = document.getElementById('captured-by-white'); const capBlackElement = document.getElementById('captured-by-black');
-
     initGame();
-    // Каждую секунду проверяем диалог ВК на предмет новой пришедшей ссылки от друга
     setInterval(listenForVkMoves, 1500);
 </script>
 </body>
